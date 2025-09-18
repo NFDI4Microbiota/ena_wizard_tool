@@ -315,6 +315,31 @@ def build_invalid_mask(df: pd.DataFrame, reports: list[pd.DataFrame]) -> pd.Data
             if i is not None and f in mask.columns and i in mask.index:
                 mask.loc[i, f] = True
     return mask
+def _lc_map(names: list[str]) -> dict[str, str]:
+    """Mapeia nome lower -> nome original (para casar sem perder capitalização)."""
+    return {n.strip().lower(): n for n in names}
+
+def order_fields_required_first(specs: pd.DataFrame) -> list[str]:
+    """
+    Retorna a lista de campos com obrigatórios primeiro (na ordem do REQUIRED_EXTRA_COLUMNS),
+    seguidos pelos demais na ordem em que aparecem no CSV de especificação.
+    """
+    spec_fields = [f for f in specs["field"].tolist() if isinstance(f, str)]
+    spec_lc = _lc_map(spec_fields)
+
+    # obrigatórios que existem na spec (case-insensitive, mantendo o nome “oficial” da spec)
+    req_in_spec = []
+    for r in REQUIRED_EXTRA_COLUMNS:
+        r_lc = r.strip().lower()
+        if r_lc in spec_lc:
+            req_in_spec.append(spec_lc[r_lc])
+
+    # demais campos (os que não são obrigatórios)
+    req_set_lc = {x.strip().lower() for x in req_in_spec}
+    others = [f for f in spec_fields if f.strip().lower() not in req_set_lc]
+
+    return req_in_spec + others
+
 
 # =========================
 # UI
@@ -330,7 +355,7 @@ def runUI():
         st.error(f"Error reading spec CSV: {e}")
         return
 
-    fields = specs["field"].tolist()
+    fields = order_fields_required_first(specs)
     if not fields:
         st.warning("No fields found in specification.")
         return
@@ -385,6 +410,8 @@ def runUI():
                 for c in fields:
                     if c not in incoming.columns:
                         incoming[c] = pd.Series(dtype="object")
+                # 👉 reordena colunas
+                incoming = incoming.reindex(columns=fields)
                 # coerção de dtypes (datas) e setar no editor
                 incoming = coerce_date_dtypes(incoming, date_cols)
                 incoming[DELETE_COL] = False
