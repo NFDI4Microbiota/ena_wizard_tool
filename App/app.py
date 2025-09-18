@@ -12,7 +12,7 @@ def runUI():
 
     page = option_menu(
         None,
-        ["Home", "Create & Validate Metadata", "Submission Jobs", "About"],
+        ["Home", "Create & Validate Metadata", "Submission Jobs", "About & Help"],
         icons=["house", "file-earmark-check", "gear-wide", "info-circle"],
         menu_icon="cast",
         default_index=0,
@@ -35,7 +35,8 @@ def runUI():
     elif page == "Submission Jobs":
         modules.jobs.runUI()
 
-    elif page == "About":
+    elif page == "About & Help":
+        modules.about.runUI()
         if "job_path" in st.session_state:
             del st.session_state["job_path"]
 

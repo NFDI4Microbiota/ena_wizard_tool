@@ -547,7 +547,10 @@ def runUI():
     # reanexar a coluna de issues calculada
     display_df[ISSUES_COL] = issue_col if len(issue_col) == len(display_df) else [""] * len(display_df)
 
-    ordered_cols = [DELETE_COL] + [c for c in display_df.columns if c not in (DELETE_COL, ISSUES_COL)] + [ISSUES_COL]
+    # 👉 mantém obrigatórios primeiro dentro do editor
+    non_helpers = [c for c in fields if c in display_df.columns]  # já na ordem certa (req primeiro)
+    ordered_cols = [DELETE_COL] + non_helpers + [ISSUES_COL]
+    display_df = display_df.reindex(columns=ordered_cols)
     display_df = display_df[ordered_cols]
     display_df = coerce_date_dtypes(display_df, date_cols)
 

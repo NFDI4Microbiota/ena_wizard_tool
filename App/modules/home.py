@@ -1,150 +1,129 @@
-# home.py
-import io
+# modules/home.py
 import base64
 import pandas as pd
 import streamlit as st
-
 from utils.css_injection import inject_css
 
-# ========= Helpers =========
 def _load_logo_b64(path: str) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
-def _build_required_columns_df() -> pd.DataFrame:
-    # Preview das principais colunas obrigatórias/centrais (você pode expandir aqui depois)
-    rows = [
-        ("Project metadata", "project_name", "Name of the project", "Free text", "Forest soil metagenome"),
-        ("Site metadata", "collection_date", "Sampling time (ISO 8601)", "YYYY-MM-DD or ISO 8601", "2013-03-25T12:42:31+01:00"),
-        ("Site metadata", "geo_loc_name", "Country/sea and region (INSDC/GAZ)", "Free text or ontology", "USA: Maryland, Bethesda"),
-        ("Site metadata", "lat", "Latitude (WGS84)", "Decimal degrees", "-41.373744"),
-        ("Site metadata", "lon", "Longitude (WGS84)", "Decimal degrees", "146.266145"),
-        ("Site metadata", "env_broad_scale", "Biome (EnvO)", "Ontology terms", "terrestrial biome [ENVO:00000446]"),
-        ("Site metadata", "env_local_scale", "Local env entity (EnvO)", "Ontology terms", "woodland biome [ENVO:01000175]"),
-        ("Site metadata", "env_medium", "Material in contact (EnvO)", "Ontology terms", "arable soil [ENVO:00005742]"),
-        ("Sample metadata", "samp_name", "Local sample identifier", "Free text (unique per submitter)", "Soil1Sample2Seq2"),
-        ("Sample metadata", "samp_taxon_id", "NCBI taxon ID of sample/control", "NCBI Taxonomy ID", "749906"),
-    ]
-    return pd.DataFrame(rows, columns=["Category", "Field", "Definition", "Expected Value / Unit", "Example"])
-
 def _build_csv_template() -> pd.DataFrame:
-    # Template inicial com colunas comuns (alinhei com suas colunas da versão antiga e MIXS centrais)
     cols = [
-        # Projeto / Site
         "project_name","collection_date","geo_loc_name","lat","lon","elev","alt","depth",
         "env_broad_scale","env_local_scale","env_medium","chem_administration","temp","salinity","pH",
-        # Sample
         "samp_name","source_mat_id","samp_size","ph","samp_taxon_id","samp_collect_method",
         "microbial_isolate","microb_cult_med",
-        # Host (quando aplicável)
         "host_taxid","host_common_name","host_height","host_length","host_tot_mass",
         "host_body_site","host_body_product","host_age","host_sex","host_diet","host_disease_stat",
-        # Técnicos/ENA usuais (você já tinha algo assim na home antiga)
         "experiment","organism","tax_id","metagenomic_source","sample_derived_from","project_name_alias",
         "completeness_score","contamination_score","completeness_software","binning_software",
         "assembly_quality","binning_parameters","taxonomic_identity_marker","isolation_source",
         "assembly_software","genome_coverage","platform","ENA_CHECKLIST"
     ]
-    # Linha vazia
     return pd.DataFrame([{c: "" for c in cols}])
 
-# ========= UI =========
 def runUI():
-    inject_css()  # mantém seu estilo / background na sidebar
+    inject_css()
 
     # Hero
     logo_b64 = _load_logo_b64("imgs/logo.png")
     st.markdown(
         f"""
-        <div style='text-align:center;'>
-          <img src="data:image/png;base64,{logo_b64}" alt="logo" width="200" />
-          <h1>ENA Automatic Submission System</h1>
-          <h4 style="color:gray;">Automating Metadata Validation & Submission to ENA</h4>
+        <div class="container-max">
+          <section class="hero">
+            <img src="data:image/png;base64,{logo_b64}" alt="logo" width="110" />
+            <div class="hero-title">NFDI ENA Submission Tool</div>
+            <div class="hero-sub">Validate metadata and prepare ENA submissions following MIXS standards.</div>
+            <div class="badge">Terrestrial package supported</div>
+          </section>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.divider()
 
-    # Intro
+    # Features (cards)
     st.markdown(
         """
-        This system aims to **automate the validation and submission of metadata and sequencing data**
-        to the **European Nucleotide Archive (ENA)**, following the metadata standards defined by the **MIXS specification**.
-        """
+        <div class="container-max section">
+          <div class="h2">✨ Features</div>
+          <div class="cards-3">
+            <div class="card">
+              <h4>Metadata validation</h4>
+              <ul class="list">
+                <li>ISO 8601 date checks</li>
+                <li>Expected values and units</li>
+                <li>Ontologies: ENVO, CHEBI, NCBI Taxonomy</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h4>Create or upload</h4>
+              <ul class="list">
+                <li>Start from a clean template</li>
+                <li>Or upload CSV/Excel</li>
+                <li>Edit inline and re-validate instantly</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h4>Submission-ready</h4>
+              <ul class="list">
+                <li>Download a clean, validated CSV</li>
+                <li>MIXS/ENA-aligned fields</li>
+                <li>Future: ENA API integration</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    st.info("Initial version: supports **Terrestrial metadata** only.")
-
-    # Features (3 colunas)
-    st.subheader("✨ Features")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown(
-            "- **Metadata validation**\n"
-            "  - ISO 8601 dates\n"
-            "  - Expected value & unit checks\n"
-            "  - Controlled vocabularies & ontologies (ENVO, CHEBI, NCBI Taxonomy)"
-        )
-    with c2:
-        st.markdown(
-            "- **Automated submission**\n"
-            "  - Upload of metadata & sequencing data files\n"
-            "  - ENA submission API *(planned for future phases)*"
-        )
-    with c3:
-        st.markdown(
-            "- **Initial Scope**\n"
-            "  - **Terrestrial metadata** package (MIXS)"
-        )
-
     st.divider()
 
-    # Workflow
-    st.subheader("🔄 Workflow")
+    # Workflow (steps)
     st.markdown(
-        "1. **Prepare metadata** (CSV/Excel)\n"
-        "2. **Validate automatically** in the system\n"
-        "3. **Upload sequencing data**\n"
-        "4. **Future**: full ENA submission automation"
+        """
+        <div class="container-max section">
+          <div class="h2">🔄 Workflow</div>
+          <div class="timeline">
+            <div class="step"><b>Prepare</b> your metadata (or start from our template).</div>
+            <div class="step"><b>Open the editor</b>: create rows or upload CSV/Excel.</div>
+            <div class="step"><b>Fix issues</b> flagged by the validator (required fields, formats, ontologies).</div>
+            <div class="step"><b>Download</b> a clean CSV ready for ENA submission.</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
+    st.divider()
 
-    # Preview das colunas obrigatórias/centrais
-    st.subheader("📋 Core Required Fields (Preview)")
-    preview_df = _build_required_columns_df()
-    st.dataframe(preview_df, use_container_width=True, hide_index=True)
-
-    # Download de template CSV
-    st.markdown("#### Download a CSV template")
-    template_df = _build_csv_template()
-    csv_bytes = template_df.to_csv(index=False).encode("utf-8")
+    # Template download
+    st.markdown('<div class="container-max section"><div class="h3 pad-top">⬇️ Download template</div></div>', unsafe_allow_html=True)
+    csv_bytes = _build_csv_template().to_csv(index=False).encode("utf-8")
     st.download_button(
-        label="⬇️ Download metadata_template.csv",
+        label="Download metadata_template.csv",
         data=csv_bytes,
         file_name="metadata_template.csv",
         mime="text/csv",
-        help="CSV template with common MIXS-aligned fields",
+        use_container_width=True,
     )
-
     st.divider()
 
-    # CTA para a página de validação & submissão
-    st.subheader("✅ Ready to validate & submit?")
-    # Se você usa multipage (pages/...), o Streamlit 1.31+ tem page_link:
+    # CTA
+    st.markdown('<div class="container-max section"><div class="h2">✅ Ready to validate & submit?</div></div>', unsafe_allow_html=True)
     try:
         st.page_link("pages/1_Validate_and_Submit.py", label="Go to Validate & Submit", icon="✅")
     except Exception:
-        st.markdown(
-            "> Use the left menu to open **Validate & Submit** page.",
-            help="If the link above doesn't work in your Streamlit version, use the sidebar navigation."
-        )
+        st.markdown("> Use the left menu to open **Create & Validate Metadata**.")
 
-    # Referências
     st.divider()
     st.markdown(
-        "**References**  \n"
-        "- [MIXS Standard - GSC](https://www.nature.com/articles/nbt1366)  \n"
-        "- [MIXS Term Browser](https://w3id.org/mixs/)  \n"
-        "- [ENA Submission Portal](https://www.ebi.ac.uk/ena/browser/submit)"
+        """
+        **References**  
+        - [MIXS Standard - GSC](https://www.nature.com/articles/nbt1366)  
+        - [MIXS Term Browser](https://w3id.org/mixs/)  
+        - [ENA Submission Portal](https://www.ebi.ac.uk/ena/browser/submit)
+        """
     )
 
 if __name__ == "__main__":
