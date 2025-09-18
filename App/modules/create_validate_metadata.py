@@ -1,3 +1,4 @@
+# modules/create_validate_metadata.py
 import streamlit as st
 import pandas as pd
 import re
@@ -41,11 +42,13 @@ REQUIRED_FIELDS: Set[str] = {c.lower() for c in REQUIRED_EXTRA_COLUMNS}
 # Accept either of these as the unique key (first one found wins)
 UNIQUE_KEY_ALIASES = ["project name", "project_name"]
 
-# Helper column for delete checkboxes (first column in editor)
+# Helper columns
 DELETE_COL = "_delete"
+STATUS_COL = "_row_status"      # "Valid" | "Issues" (para mirror/heatmap)
+ISSUES_COL = "⚠︎ issues"        # lista compacta de campos com erro por linha (somente leitura no editor)
 
-# A computed status column (for the read-only mirror table below the editor)
-STATUS_COL = "_row_status"  # "Valid" | "Issues" (not shown in editor)
+# Allowed ENA checklists (exemplos — troque pela lista real quando tiver)
+ENA_CHECKLIST_ALLOWED = ["ERC000011", "ERC000012", "ERC000013"]
 
 # =========================
 # CSV spec path resolver
@@ -95,7 +98,7 @@ def load_specs(csv_path: Path) -> pd.DataFrame:
         })
         specs = pd.concat([specs, add_df], ignore_index=True)
 
-    # Kind inference for editor UX
+    # Kind inference para UX no editor
     def infer_kind(field: str, rx: str) -> str:
         f = field.lower()
         if "latitude" in f:
@@ -123,10 +126,9 @@ def column_help(row) -> str:
     return "\n\n".join(parts)
 
 # =========================
-# Date helpers (to avoid DateColumn dtype errors)
+# Date helpers
 # =========================
 def expand_date_aliases(date_cols: list[str]) -> list[str]:
-    """Also include aliases with space/underscore swapped (e.g., collection date <-> collection_date)."""
     s = set(date_cols)
     for c in list(date_cols):
         s.add(c.replace("_", " "))
@@ -134,7 +136,6 @@ def expand_date_aliases(date_cols: list[str]) -> list[str]:
     return list(s)
 
 def coerce_date_dtypes(df: pd.DataFrame, date_cols: list[str]) -> pd.DataFrame:
-    """Ensure DateColumn fields are actually datetime64[ns] for the editor to accept."""
     out = df.copy()
     for col in date_cols:
         if col in out.columns:
@@ -142,13 +143,12 @@ def coerce_date_dtypes(df: pd.DataFrame, date_cols: list[str]) -> pd.DataFrame:
     return out
 
 # =========================
-# Helpers: keep one blank row, exports, etc.
+# Helpers: blank row, export, etc.
 # =========================
 def _is_blank_row(series: pd.Series) -> bool:
     return all((pd.isna(v) or str(v).strip() == "" or (isinstance(v, bool) and v is False)) for v in series.values)
 
 def ensure_tail_blank(df: pd.DataFrame) -> pd.DataFrame:
-    """Keep exactly one blank row at the end, respecting dtypes (and helper cols)."""
     keep_rows = [i for i, row in df.iterrows() if not _is_blank_row(row)]
     df = df.loc[keep_rows].copy()
 
@@ -168,12 +168,13 @@ def ensure_tail_blank(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def drop_tail_blank_for_export(df: pd.DataFrame) -> pd.DataFrame:
-    """Remove trailing blank row and helper columns for export/validation."""
     out = df.copy()
     if DELETE_COL in out.columns:
         out = out.drop(columns=[DELETE_COL])
     if STATUS_COL in out.columns:
         out = out.drop(columns=[STATUS_COL])
+    if ISSUES_COL in out.columns:
+        out = out.drop(columns=[ISSUES_COL])
     if len(out) == 0:
         return out
     last = out.iloc[-1]
@@ -197,7 +198,6 @@ def to_str_for_regex(value, kind: str) -> str:
 # Validation
 # =========================
 def validate_required(df: pd.DataFrame, specs: pd.DataFrame) -> pd.DataFrame:
-    """Required fields must be non-empty for all non-blank rows."""
     results = []
     kinds = {r["field"]: r.get("kind", "text") for _, r in specs.iterrows()}
     fields_lower = {c.lower(): c for c in df.columns}
@@ -218,7 +218,6 @@ def validate_required(df: pd.DataFrame, specs: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(results)
 
 def validate_regex(df: pd.DataFrame, specs: pd.DataFrame) -> pd.DataFrame:
-    """Regex per cell (empties OK here; required handled separately)."""
     results = []
     regex_map = {r["field"]: r.get("regex", "") for _, r in specs.iterrows()}
     kind_map  = {r["field"]: r.get("kind", "text") for _, r in specs.iterrows()}
@@ -249,7 +248,6 @@ def resolve_unique_key(df: pd.DataFrame) -> str:
     return UNIQUE_KEY_ALIASES[0]
 
 def validate_unique_key(df: pd.DataFrame, key_field: str) -> pd.DataFrame:
-    """Validate uniqueness for the given key_field (ignores blank keys)."""
     if key_field not in df.columns:
         return pd.DataFrame([{"row_index": None, "field": key_field, "value": "", "valid": False, "message": f"Unique key field '{key_field}' missing in schema."}])
     results = []
@@ -261,7 +259,50 @@ def validate_unique_key(df: pd.DataFrame, key_field: str) -> pd.DataFrame:
             results.append({"row_index": i, "field": key_field, "value": v, "valid": False, "message": f"Duplicate '{key_field}': must be unique."})
     return pd.DataFrame(results)
 
-# For heatmap styling (read-only mirror below the editor)
+# Semântica mínima (shape) para alguns campos
+def validate_envo_like(s: str) -> bool:
+    return bool(re.fullmatch(r"(ENVO:)?\d{7}", str(s).strip()))
+
+def validate_chebi_like(s: str) -> bool:
+    s = str(s).strip().split(";")[0]  # aceita "CHEBI:12345;timestamp"
+    return bool(re.fullmatch(r"(CHEBI:)?\d{1,6}", s))
+
+def validate_taxid_like(s: str) -> bool:
+    return bool(re.fullmatch(r"\d{1,9}", str(s).strip()))
+
+SEMANTIC_FIELDS = {
+    "env_broad_scale": validate_envo_like,
+    "env_local_scale": validate_envo_like,
+    "env_medium":      validate_envo_like,
+    "chem_administration": validate_chebi_like,
+    "samp_taxon_id":   validate_taxid_like,
+    "tax_id":          validate_taxid_like,
+}
+
+def validate_semantics(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for field, fn in SEMANTIC_FIELDS.items():
+        if field not in df.columns: 
+            continue
+        for i, v in df[field].items():
+            if pd.isna(v) or str(v).strip()=="":
+                continue
+            if not fn(v):
+                rows.append({"row_index": i, "field": field, "value": v, "valid": False,
+                             "message": "Ontology/ID shape mismatch (expected ENVO/CHEBI/TaxID pattern)."})
+    return pd.DataFrame(rows)
+
+def validate_ena_checklist(df: pd.DataFrame) -> pd.DataFrame:
+    if "ENA-CHECKLIST" not in df.columns:
+        return pd.DataFrame([{"row_index": None,"field":"ENA-CHECKLIST","value":"","valid":False,"message":"ENA-CHECKLIST missing in schema."}])
+    bad = []
+    for i, v in df["ENA-CHECKLIST"].fillna("").items():
+        if v == "": 
+            continue
+        if v not in ENA_CHECKLIST_ALLOWED:
+            bad.append({"row_index": i, "field":"ENA-CHECKLIST","value":v,"valid":False,"message":"Value not in allowed ENA checklist list."})
+    return pd.DataFrame(bad)
+
 def build_invalid_mask(df: pd.DataFrame, reports: list[pd.DataFrame]) -> pd.DataFrame:
     mask = pd.DataFrame(False, index=df.index, columns=df.columns)
     for rep in reports:
@@ -275,24 +316,12 @@ def build_invalid_mask(df: pd.DataFrame, reports: list[pd.DataFrame]) -> pd.Data
                 mask.loc[i, f] = True
     return mask
 
-def style_with_mask(df: pd.DataFrame, mask: pd.DataFrame):
-    def highlight(val, flag):
-        return "background-color: #ffe6e6" if flag else ""
-    return df.style.apply(
-        lambda row: [highlight(row[c], mask.loc[row.name, c]) for c in df.columns],
-        axis=1
-    )
-
 # =========================
 # UI
 # =========================
 def runUI():
-    # -------- Step header (guidance) --------
     st.markdown("## Create & Validate Metadata")
-    st.info("**Step 1: Fill the table** → **Step 2: Fix errors** (see Validation panel) → **Step 3: Download**", icon="🧭")
-
-    #with st.expander("Specification source CSV", expanded=False):
-    #    st.code(str(CSV_SPEC_PATH))
+    st.info("**Step 1: Create or Upload** → **Step 2: Fix errors** → **Step 3: Download**", icon="🧭")
 
     # Load spec
     try:
@@ -306,11 +335,11 @@ def runUI():
         st.warning("No fields found in specification.")
         return
 
-    # Date columns
+    # Date columns (+ aliases)
     date_cols = specs.loc[specs["kind"] == "date", "field"].tolist()
-    date_cols = expand_date_aliases(date_cols)  # include underscore/space aliases
+    date_cols = expand_date_aliases(date_cols)
 
-    # Column config (labels include expected hint and '*' for required)
+    # Column config (labels com expected e * para required)
     col_cfg = {}
     for _, r in specs.iterrows():
         field = r["field"]
@@ -332,63 +361,111 @@ def runUI():
         else:
             col_cfg[field] = st.column_config.TextColumn(label, help=help_text)
 
-    # Initialize session-state DataFrame with dtypes
+    if "ENA-CHECKLIST" in fields:
+        col_cfg["ENA-CHECKLIST"] = st.column_config.SelectboxColumn(
+            "ENA-CHECKLIST *",
+            options=ENA_CHECKLIST_ALLOWED,
+            help="Select an allowed ENA checklist identifier.",
+            disabled=False
+        )
+
+    # ========== Upload OU Criação ==========
+    left, right = st.columns([1.2, 1.8])
+    with left:
+        up = st.file_uploader("Upload CSV/Excel", type=["csv", "xlsx"], help="Upload to replace the current table with file content.")
+        if up is not None:
+            try:
+                if up.name.lower().endswith(".csv"):
+                    incoming = pd.read_csv(up)
+                else:
+                    incoming = pd.read_excel(up)
+                # manter somente colunas da spec + criar faltantes
+                keep = [c for c in incoming.columns if c in fields]
+                incoming = incoming[keep].copy() if keep else pd.DataFrame(columns=fields)
+                for c in fields:
+                    if c not in incoming.columns:
+                        incoming[c] = pd.Series(dtype="object")
+                # coerção de dtypes (datas) e setar no editor
+                incoming = coerce_date_dtypes(incoming, date_cols)
+                incoming[DELETE_COL] = False
+                st.session_state.metadata_df = ensure_tail_blank(incoming)
+                st.session_state.page_mode = "Validation (uploaded)"
+                st.success(f"Loaded {len(incoming)} rows from {up.name}.")
+            except Exception as e:
+                st.error(f"Failed to load file: {e}")
+
+    with right:
+        st.caption("Or start from an empty template:")
+        if st.button("Start new (empty template)", type="secondary"):
+            init = {c: pd.Series(dtype="object") for c in fields}
+            for c in date_cols:
+                if c in init:
+                    init[c] = pd.Series(dtype="datetime64[ns]")
+            df0 = pd.DataFrame(init)
+            df0[DELETE_COL] = False
+            st.session_state.metadata_df = ensure_tail_blank(coerce_date_dtypes(df0, date_cols))
+            st.session_state.page_mode = "Creation"
+            st.success("Initialized new empty table.")
+
+    # Se ainda não existe nada em sessão (primeira carga): cria vazio
     if "metadata_df" not in st.session_state:
         init = {c: pd.Series(dtype="object") for c in fields}
         for c in date_cols:
             if c in init:
                 init[c] = pd.Series(dtype="datetime64[ns]")
-        st.session_state.metadata_df = pd.DataFrame(init)
-        st.session_state.metadata_df[DELETE_COL] = False
-        # Ensure proper date dtypes
-        st.session_state.metadata_df = coerce_date_dtypes(st.session_state.metadata_df, date_cols)
-        st.session_state.metadata_df = ensure_tail_blank(st.session_state.metadata_df)
+        df0 = pd.DataFrame(init)
+        df0[DELETE_COL] = False
+        st.session_state.metadata_df = ensure_tail_blank(coerce_date_dtypes(df0, date_cols))
+        st.session_state.page_mode = "Creation"
 
-    # Realign schema if spec changed (preserve delete col)
-    current_non_helper = [c for c in st.session_state.metadata_df.columns if c not in (DELETE_COL, STATUS_COL)]
-    if current_non_helper != fields:
-        old = st.session_state.metadata_df.drop(columns=[DELETE_COL, STATUS_COL], errors="ignore")
-        init = {c: pd.Series(dtype="object") for c in fields}
-        for c in date_cols:
-            if c in init:
-                init[c] = pd.Series(dtype="datetime64[ns]")
-        new_df = pd.DataFrame(init)
-        for c in old.columns:
-            if c in new_df.columns:
-                new_df[c] = old[c]
-        st.session_state.metadata_df = new_df
-        st.session_state.metadata_df[DELETE_COL] = False
-        st.session_state.metadata_df = coerce_date_dtypes(st.session_state.metadata_df, date_cols)
-        st.session_state.metadata_df = ensure_tail_blank(st.session_state.metadata_df)
+    st.caption(f"**Mode:** {st.session_state.get('page_mode','Creation')}  •  Spec: `{CSV_SPEC_PATH.name}`")
 
-    # --- CSS to freeze ✖ column on the left ---
-    st.markdown(
-        """
-        <style>
-        [data-testid="stDataFrame"] table tbody tr td:first-child,
-        [data-testid="stDataFrame"] table thead tr th:first-child {
-            position: sticky;
-            left: 0;
-            z-index: 1;
-            background: white;
-            box-shadow: 1px 0 0 #eee;
-        }
-        [data-testid="stDataFrame"] table thead tr th:first-child {
-            z-index: 2;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
+    # ========= PRÉ-VALIDAÇÃO (para preencher a coluna "⚠︎ issues" no editor) =========
+    pre_export = drop_tail_blank_for_export(st.session_state.metadata_df).copy()
+    # normaliza datas para a checagem
+    for c in [x for x in pre_export.columns if x.lower() in [dc.lower() for dc in date_cols]]:
+        pre_export[c] = pd.to_datetime(pre_export[c], errors="coerce").dt.date.astype("string")
 
-    # ---------- Toolbar ----------
+    pre_key = resolve_unique_key(pre_export)
+    pre_req = validate_required(pre_export, specs)
+    pre_rx  = validate_regex(pre_export, specs)
+    pre_uniq= validate_unique_key(pre_export, pre_key)
+    pre_ena = validate_ena_checklist(pre_export)
+    pre_sem = validate_semantics(pre_export)
+
+    pre_reports = [pre_req, pre_rx, pre_uniq, pre_ena, pre_sem]
+    pre_full = pd.concat([r for r in pre_reports if r is not None and not r.empty],
+                         ignore_index=True) if any((r is not None and not r.empty) for r in pre_reports) \
+                         else pd.DataFrame(columns=["row_index","field","value","valid","message"])
+
+    # issues por linha para exibir no editor
+    issues_by_row = {}
+    for _, r in pre_full[~pre_full["valid"]].iterrows():
+        i = r["row_index"]; f = str(r["field"])
+        if i is None:
+            continue
+        issues_by_row.setdefault(i, set()).add(f)
+
+    # Monta um DF de exibição: adiciona coluna "⚠︎ issues" somente leitura
+    display_df = st.session_state.metadata_df.copy()
+    issue_col = []
+    # alinhar ao tamanho do display_df (inclui linha em branco no final)
+    n_rows = len(display_df)
+    for i in range(n_rows):
+        if i < len(pre_export):
+            short = ", ".join(sorted(issues_by_row.get(i, [])))
+        else:
+            short = ""
+        issue_col.append(short)
+    display_df[ISSUES_COL] = issue_col
+
+    # -------- Toolbar --------
     st.markdown("### Metadata editor")
     st.caption("Use the toolbar to add, select, and delete rows. The last row is always blank for quick entry.")
 
-    t1, t2, t3, t4 = st.columns([1.1, 1.1, 1.1, 6])
+    t1, t2, t3, t4, t5 = st.columns([1.1, 1.1, 1.1, 1.4, 4])
     with t1:
         if st.button("➕ Add example row"):
-            # Build a sample row using the spec "example" values when available
             row = {}
             for _, r in specs.iterrows():
                 f = r["field"]
@@ -403,11 +480,10 @@ def runUI():
                 else:
                     row[f] = pd.NaT if r["kind"] == "date" else ""
             new = pd.DataFrame([row])
-            base = st.session_state.metadata_df.drop(columns=[DELETE_COL], errors="ignore")
+            base = st.session_state.metadata_df.drop(columns=[DELETE_COL, ISSUES_COL], errors="ignore")
             merged = pd.concat([drop_tail_blank_for_export(base), new], ignore_index=True)
             st.session_state.metadata_df = merged
             st.session_state.metadata_df[DELETE_COL] = False
-            # ensure dates are proper dtype
             st.session_state.metadata_df = coerce_date_dtypes(st.session_state.metadata_df, date_cols)
             st.session_state.metadata_df = ensure_tail_blank(st.session_state.metadata_df)
 
@@ -421,90 +497,125 @@ def runUI():
         if st.button("Clear selection"):
             st.session_state.metadata_df.loc[:, DELETE_COL] = False
 
-    # Ensure trailing blank & ✖ first
+    with t4:
+        if st.button("🧹 Auto-fix common issues"):
+            df = st.session_state.metadata_df.copy()
+            for c in df.columns:
+                if c in (DELETE_COL, STATUS_COL, ISSUES_COL):
+                    continue
+                if pd.api.types.is_object_dtype(df[c].dtype):
+                    df[c] = df[c].astype(str).str.strip().replace({"nan": ""})
+            for c in df.columns:
+                cl = c.lower()
+                if "latitude" in cl or "longitude" in cl:
+                    df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", "."), errors="coerce")
+            df = coerce_date_dtypes(df, date_cols)
+            st.session_state.metadata_df = ensure_tail_blank(df)
+            st.success("Auto-fix applied.")
+
+    # garantir trailing blank e ORDER: ✖ primeiro; issues logo após
     st.session_state.metadata_df = ensure_tail_blank(st.session_state.metadata_df)
-    cols = [DELETE_COL] + [c for c in st.session_state.metadata_df.columns if c != DELETE_COL]
-    st.session_state.metadata_df = st.session_state.metadata_df[cols]
+    # reconstruir display_df (pois toolbar pode ter alterado base)
+    display_df = st.session_state.metadata_df.copy()
+    # reanexar a coluna de issues calculada
+    display_df[ISSUES_COL] = issue_col if len(issue_col) == len(display_df) else [""] * len(display_df)
 
-    # Make sure date columns have datetime64[ns] dtype before rendering the editor
-    st.session_state.metadata_df = coerce_date_dtypes(st.session_state.metadata_df, date_cols)
+    ordered_cols = [DELETE_COL] + [c for c in display_df.columns if c not in (DELETE_COL, ISSUES_COL)] + [ISSUES_COL]
+    display_df = display_df[ordered_cols]
+    display_df = coerce_date_dtypes(display_df, date_cols)
 
-    # ---------- Editor ----------
+    # ---------- Editor (fallback) ----------
     edited = st.data_editor(
-        st.session_state.metadata_df,
+        display_df,
         column_config={
             DELETE_COL: st.column_config.CheckboxColumn("✖", help="Tick to mark this row for deletion."),
             **col_cfg,
+            ISSUES_COL: st.column_config.TextColumn(ISSUES_COL, help="List of fields with issues in this row.", disabled=True),
         },
         hide_index=True,
         num_rows="dynamic",
         use_container_width=True
     )
 
-    # Apply edits and keep last row blank; coerce date dtypes again (cheap & safe)
-    st.session_state.metadata_df = ensure_tail_blank(edited)
-    st.session_state.metadata_df = coerce_date_dtypes(st.session_state.metadata_df, date_cols)
-    # Keep ✖ first
-    cols = [DELETE_COL] + [c for c in st.session_state.metadata_df.columns if c != DELETE_COL]
-    st.session_state.metadata_df = st.session_state.metadata_df[cols]
+    # aplicar edits → remover coluna de issues antes de salvar no estado
+    if ISSUES_COL in edited.columns:
+        edited_no_issues = edited.drop(columns=[ISSUES_COL])
+    else:
+        edited_no_issues = edited
 
-    # Delete action (kept separate, obvious)
+    st.session_state.metadata_df = ensure_tail_blank(edited_no_issues)
+    st.session_state.metadata_df = coerce_date_dtypes(st.session_state.metadata_df, date_cols)
+
+    # deletar selecionados
     if st.button("🗑️ Delete selected rows", type="secondary", use_container_width=True):
         mask = st.session_state.metadata_df[DELETE_COL] != True
-        st.session_state.metadata_df = st.session_state.metadata_df.loc[mask].drop(columns=[DELETE_COL])
+        st.session_state.metadata_df = st.session_state.metadata_df.loc[mask].drop(columns=[DELETE_COL], errors="ignore")
         st.session_state.metadata_df[DELETE_COL] = False
         st.session_state.metadata_df = coerce_date_dtypes(st.session_state.metadata_df, date_cols)
         st.session_state.metadata_df = ensure_tail_blank(st.session_state.metadata_df)
-        cols = [DELETE_COL] + [c for c in st.session_state.metadata_df.columns if c != DELETE_COL]
-        st.session_state.metadata_df = st.session_state.metadata_df[cols]
 
-    # ---------- Normalized copy for validation/export ----------
+    # ---------- Validação "oficial" pós-edição ----------
     export_df = drop_tail_blank_for_export(st.session_state.metadata_df).copy()
-    # normalize dates for validation/export
-    for c in date_cols:
-        if c in export_df.columns:
-            export_df[c] = pd.to_datetime(export_df[c]).dt.date.astype("string")
+    for c in [x for x in export_df.columns if x.lower() in [dc.lower() for dc in date_cols]]:
+        export_df[c] = pd.to_datetime(export_df[c], errors="coerce").dt.date.astype("string")
 
-    # ===== Live validation =====
     key_field = resolve_unique_key(export_df)
     required_report = validate_required(export_df, specs)
     regex_report    = validate_regex(export_df, specs)
     unique_report   = validate_unique_key(export_df, key_field)
+    ena_report      = validate_ena_checklist(export_df)
+    sem_report      = validate_semantics(export_df)
 
-    reports = [required_report, regex_report, unique_report]
+    reports = [required_report, regex_report, unique_report, ena_report, sem_report]
     full_report = pd.concat(
         [r for r in reports if r is not None and not r.empty],
         ignore_index=True
     ) if any((r is not None and not r.empty) for r in reports) else pd.DataFrame(columns=["row_index","field","value","valid","message"])
 
-    # Build per-row status for the mirror view
+    # status por linha (mirror/heatmap)
     if not export_df.empty:
         invalid_mask = build_invalid_mask(export_df, reports)
         row_has_issue = invalid_mask.any(axis=1)
-        status_series = row_has_issue.map(lambda x: "Issues" if x else "Valid")
         mirror = export_df.copy()
-        mirror[STATUS_COL] = status_series
+        mirror[STATUS_COL] = row_has_issue.map(lambda x: "Issues" if x else "Valid")
     else:
         invalid_mask = pd.DataFrame(columns=export_df.columns)
         mirror = export_df.copy()
 
     issues_count = (~full_report["valid"]).sum() if not full_report.empty else 0
 
-    # ---------- Validation panel ----------
+    # ---------- Dataset summary ----------
+    st.markdown("### Dataset summary")
+    r1, r2, r3 = st.columns(3)
+    with r1: st.metric("Rows (non-empty)", len(export_df))
+    with r2: st.metric("Required fields", len(REQUIRED_FIELDS))
+    with r3: st.metric("All issues", issues_count)
+
+    # ---------- Cell inspector (detalhes dos erros por linha) ----------
+    st.markdown("### Cell inspector")
+    if len(export_df) == 0:
+        st.info("No data yet. Start filling the table above or upload a CSV/Excel.")
+    else:
+        row_to_inspect = st.number_input(
+            "Row number (1-based)", min_value=1, max_value=len(export_df), value=1, step=1
+        )
+        ri = row_to_inspect - 1
+        probs = full_report[(full_report["row_index"] == ri) & (~full_report["valid"])]
+        if not probs.empty:
+            st.write("**Errors in this row:**")
+            # ordenar por campo para facilitar a correção
+            st.dataframe(probs[["field", "value", "message"]].sort_values("field").reset_index(drop=True), use_container_width=True)
+        else:
+            st.success("No errors in this row.")
+
+    # ---------- Validation panel extra (heatmap e relatórios) ----------
     st.markdown("### Validation")
-    st.caption("Fix red cells. All checks must pass to enable Download.")
-    c1, c2 = st.columns([1, 5])
-    with c1:
-        st.metric("Issues found", issues_count)
-    with c2:
-        st.write("")
+    st.caption("Fix red cells in the heatmap below. All checks must pass to enable Download.")
 
     tabs = st.tabs(["Heatmap", "Issues by column", "All issues"])
     with tabs[0]:
         if not export_df.empty:
-            # Attach status as first column in the heatmap mirror
             mirror_show = mirror[[STATUS_COL] + [c for c in mirror.columns if c != STATUS_COL]]
-            # style on the original columns only
             style_mask = invalid_mask.reindex(columns=[c for c in mirror_show.columns if c != STATUS_COL], fill_value=False)
             styled = mirror_show.style.apply(
                 lambda row: [""] + ["background-color: #ffe6e6" if style_mask.loc[row.name, col] else "" for col in style_mask.columns],
@@ -512,7 +623,7 @@ def runUI():
             )
             st.dataframe(styled, use_container_width=True)
         else:
-            st.info("No data yet. Start filling the table above.")
+            st.info("No data yet.")
 
     with tabs[1]:
         if not full_report.empty:
@@ -533,13 +644,13 @@ def runUI():
         else:
             st.success("No issues detected.")
 
-    # ---------- Download (only when all good) ----------
+    # ---------- Download ----------
     all_ok = full_report.empty
     if all_ok and not export_df.empty:
         buf = StringIO(); export_df.to_csv(buf, index=False)
         st.success("✅ All checks passed. You can download your CSV.")
         st.download_button("⬇️ Download CSV", buf.getvalue().encode("utf-8"),
-                           file_name="metadata_edited.csv", mime="text/csv",
+                           file_name="metadata_validated.csv", mime="text/csv",
                            use_container_width=True)
     else:
         st.info("Complete Step 2 (fix all issues) to enable Download.")
