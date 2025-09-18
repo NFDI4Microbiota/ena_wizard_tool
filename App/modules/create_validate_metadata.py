@@ -291,8 +291,8 @@ def runUI():
     st.markdown("## Create & Validate Metadata")
     st.info("**Step 1: Fill the table** → **Step 2: Fix errors** (see Validation panel) → **Step 3: Download**", icon="🧭")
 
-    with st.expander("Specification source CSV", expanded=False):
-        st.code(str(CSV_SPEC_PATH))
+    #with st.expander("Specification source CSV", expanded=False):
+    #    st.code(str(CSV_SPEC_PATH))
 
     # Load spec
     try:
