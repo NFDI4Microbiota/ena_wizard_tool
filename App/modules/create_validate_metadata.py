@@ -56,7 +56,7 @@ STATUS_COL = "_row_status"      # "Valid" | "Issues" (for mirror/heatmap)
 ISSUES_COL = "⚠︎ issues"        # compact list of fields with errors per row (read-only in the editor)
 
 # Allowed ENA checklists (examples — replace with the real list when available)
-ENA_CHECKLIST_ALLOWED = ["ERC000011", "ERC000012", "ERC000013"]
+ENA_CHECKLIST_ALLOWED = ["ERC000011", "ERC000012", "ERC000013",  "ERC000047"]
 
 # =========================
 # CSV spec path resolver
@@ -889,8 +889,7 @@ def runUI():
             st.success("No issues detected.")
 
     # ---------- Download ----------
-    all_ok = full_report.empty
-    if all_ok and not export_df.empty:
+    if (~invalid_mask).all().all():
         buf = StringIO(); export_df.to_csv(buf, index=False)
         st.success("✅ All checks passed. You can download your CSV.")
         st.download_button("⬇️ Download CSV", buf.getvalue().encode("utf-8"),
