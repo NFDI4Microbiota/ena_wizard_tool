@@ -34,8 +34,8 @@ def runUI():
           <section class="hero">
             <img src="data:image/png;base64,{logo_b64}" alt="logo" width="110" />
             <div class="hero-title">NFDI ENA Submission Tool</div>
-            <div class="hero-sub">Validate metadata and prepare ENA submissions following MIXS standards.</div>
-            <div class="badge">Terrestrial package supported</div>
+            <div class="hero-sub">Validate metadata and prepare metagenome-assembled genome (MAG) submissions.</div>
+            <div class="badge">Genomic Standards Consortium package for MAGs (MIMAGS) supported.</div>
           </section>
         </div>
         """,

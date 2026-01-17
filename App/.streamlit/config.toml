@@ -1,6 +1,6 @@
 [theme]
 base="light"
-primaryColor="#1a9b46"
+primaryColor="#4287de"
 
 [server]
 runOnSave = true
