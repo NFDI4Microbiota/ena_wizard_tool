@@ -1,0 +1,28 @@
+SAMPLE : MAG0001
+INFO : Your application version is 9.0.1
+ERROR: Unknown study PRJEB106625 or the study cannot be referenced by your submission account. Studies must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmp1xew672v, line number: 1, field: STUDY, value: PRJEB106625]
+INFO : Creating report file: /tmp/./webin-cli.report
+ERROR: Unknown sample ERS32097227 or the sample cannot be referenced by your submission account. Samples must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmp1xew672v, line number: 2, field: SAMPLE, value: ERS32097227]
+ERROR: Unknown sample ERS32097227 or the sample cannot be referenced by your submission account. Samples must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmp1xew672v, line number: 2, field: SAMPLE, value: ERS32097227]
+ERROR: Invalid manifest file. Please see the error report file "/tmp/tmp1xew672v.report".
+SAMPLE : MAG0002
+INFO : Your application version is 9.0.1
+ERROR: Unknown study PRJEB106625 or the study cannot be referenced by your submission account. Studies must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmpu3e1ukut, line number: 1, field: STUDY, value: PRJEB106625]
+INFO : Creating report file: /tmp/./webin-cli.report
+ERROR: Unknown sample ERS32097228 or the sample cannot be referenced by your submission account. Samples must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmpu3e1ukut, line number: 2, field: SAMPLE, value: ERS32097228]
+ERROR: Unknown sample ERS32097228 or the sample cannot be referenced by your submission account. Samples must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmpu3e1ukut, line number: 2, field: SAMPLE, value: ERS32097228]
+ERROR: Invalid manifest file. Please see the error report file "/tmp/tmpu3e1ukut.report".
+SAMPLE : MAG00001
+INFO : Your application version is 9.0.1
+ERROR: Unknown study PRJEB106626 or the study cannot be referenced by your submission account. Studies must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmp52awc_k0, line number: 1, field: STUDY, value: PRJEB106626]
+INFO : Creating report file: /tmp/./webin-cli.report
+ERROR: Unknown sample ERS32097229 or the sample cannot be referenced by your submission account. Samples must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmp52awc_k0, line number: 2, field: SAMPLE, value: ERS32097229]
+ERROR: Unknown sample ERS32097229 or the sample cannot be referenced by your submission account. Samples must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmp52awc_k0, line number: 2, field: SAMPLE, value: ERS32097229]
+ERROR: Invalid manifest file. Please see the error report file "/tmp/tmp52awc_k0.report".
+SAMPLE : MAG00002
+INFO : Your application version is 9.0.1
+ERROR: Unknown study PRJEB106626 or the study cannot be referenced by your submission account. Studies must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmpzushqij1, line number: 1, field: STUDY, value: PRJEB106626]
+INFO : Creating report file: /tmp/./webin-cli.report
+ERROR: Unknown sample ERS32097230 or the sample cannot be referenced by your submission account. Samples must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmpzushqij1, line number: 2, field: SAMPLE, value: ERS32097230]
+ERROR: Unknown sample ERS32097230 or the sample cannot be referenced by your submission account. Samples must be submitted before they can be referenced in the submission. [manifest file: /tmp/tmpzushqij1, line number: 2, field: SAMPLE, value: ERS32097230]
+ERROR: Invalid manifest file. Please see the error report file "/tmp/tmpzushqij1.report".
