@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="receipt.xsl"?>
+<RECEIPT receiptDate="2026-01-19T16:21:48.224Z" submissionFile="submission-UFZ_1768839708224.xml" success="true">
+     <SAMPLE accession="ERS32097390" alias="MAG001" status="PRIVATE">
+          <EXT_ID accession="SAMEA131905324" type="biosample"/>
+     </SAMPLE>
+     <SAMPLE accession="ERS32097391" alias="MAG002" status="PRIVATE">
+          <EXT_ID accession="SAMEA131905325" type="biosample"/>
+     </SAMPLE>
+     <PROJECT accession="PRJEB106830" alias="banana" status="PRIVATE" holdUntilDate="2028-01-19Z">
+          <EXT_ID accession="ERP187882" type="study"/>
+     </PROJECT>
+     <SUBMISSION accession="ERA35454283" alias="SUBMISSION-19-01-2026-16:21:48:073"/>
+     <MESSAGES>
+          <INFO>This submission is a TEST submission and will be discarded within 24 hours</INFO>
+     </MESSAGES>
+     <ACTIONS>ADD</ACTIONS>
+</RECEIPT>
