@@ -1,3 +1,9 @@
+Usage example:
+
+```bash
+python nfdi-ena-cli.py --metadata example.tsv --fasta-dir fasta --ena-user 'your username' --ena-password 'your password' --study-name 'study example' --study-title 'title for the study' --study-description 'description for the study'
+```
+
 # ENA Automatic Submission System
 
 This system aims to **automate the validation and submission of metadata and sequencing data** to the **European Nucleotide Archive (ENA)**, following the metadata standards defined by the **MIXS specification**.

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import pandas as pd
 import polars as pl
 import re
 import xml.etree.ElementTree as ET
@@ -106,8 +105,10 @@ def load_fields_from_xml(xml_path: str) -> dict:
 # -----------------------------
 # VALIDATION
 # -----------------------------
-def validate_dataframe(df: pd.DataFrame, field_defs: dict) -> None:
+def validate_dataframe(df: pl.DataFrame, field_defs: dict) -> None:
     errors = []
+    # Add a temporary index column to track row numbers
+    df_with_idx = df.with_row_index(offset=1)
 
     for col in df.columns:
         if col not in field_defs:
@@ -115,29 +116,42 @@ def validate_dataframe(df: pd.DataFrame, field_defs: dict) -> None:
 
         field = field_defs[col]
 
-        for idx, value in df[col].items():
-            value = "" if pd.isna(value) else str(value).strip()
+        # 1. Mandatory Check
+        if field["mandatory"]:
+            # Find rows where value is null or empty string
+            invalid_rows = df_with_idx.filter(
+                pl.col(col).is_null() | (pl.col(col).str.strip_chars() == "")
+            ).select("index").to_series().to_list()
+            
+            if invalid_rows:
+                errors.append(f"Column '{col}': empty at rows {invalid_rows}")
 
-            if field["mandatory"] and not value:
-                errors.append(f"Row {idx+1}: '{col}' is mandatory")
-                continue
+        # 2. Regex Check
+        if field["type"] == "regex":
+            pattern = field["regex"].pattern
+            # Find rows that don't match (and aren't null, handled above)
+            invalid_rows = df_with_idx.filter(
+                pl.col(col).is_not_null() & 
+                (pl.col(col).str.strip_chars() != "") &
+                ~pl.col(col).str.contains(pattern)
+            ).select("index").to_series().to_list()
+            
+            if invalid_rows:
+                errors.append(f"Column '{col}': regex mismatch at rows {invalid_rows}")
 
-            if not value:
-                continue
-
-            if field["type"] == "regex" and not field["regex"].fullmatch(value):
-                errors.append(
-                    f"Row {idx+1}: '{col}'='{value}' does not match {field['regex'].pattern}"
-                )
-
-            if field["type"] == "enum" and value not in field["enum"]:
-                errors.append(
-                    f"Row {idx+1}: '{col}'='{value}' not in {field['enum']}"
-                )
+        # 3. Enum Check
+        if field["type"] == "enum":
+            invalid_rows = df_with_idx.filter(
+                pl.col(col).is_not_null() & 
+                (pl.col(col).str.strip_chars() != "") &
+                ~pl.col(col).is_in(field["enum"])
+            ).select("index").to_series().to_list()
+            
+            if invalid_rows:
+                errors.append(f"Column '{col}': invalid choice at rows {invalid_rows}")
 
     if errors:
         raise ValueError("\n".join(errors))
-
 # -----------------------------
 # FASTA DISCOVERY
 # -----------------------------
@@ -165,8 +179,12 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
         "ENA-CHECKLIST",
     }
 
-    shutil.rmtree("logs")
-    os.makedirs("logs", exist_ok=True)
+    logs_path = "logs"
+
+    if os.path.exists(logs_path):
+        shutil.rmtree("logs", ignore_errors=True)
+
+    os.makedirs(logs_path, exist_ok=True)
 
     for offset in tqdm(range(0, len(df), batch_size)):
 
@@ -298,6 +316,7 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
             url = "https://www.ebi.ac.uk/ena/submit/webin-v2/submit"
 
         auth = (submission["ena_user"], submission["ena_password"])
+        
         headers = {"Accept": "application/xml", "Content-Type": "application/xml"}
 
         xml_text = requests.post(url, headers=headers, data=xml_bytes, auth=auth).text
@@ -417,7 +436,7 @@ def main():
 
     field_defs = load_fields_from_xml("checklists/ERC000047.xml")
 
-    df = pd.read_csv(args.metadata, dtype="string")
+    df = pl.read_csv(args.metadata, separator="\t", infer_schema_length=0)
     validate_dataframe(df, field_defs)
 
     fasta_map = collect_fastas(args.fasta_dir)
@@ -433,10 +452,10 @@ def main():
         "study_description": args.study_description,
         "ena_user": args.ena_user,
         "ena_password": args.ena_password,
-        "portal": "test" if args.portal == "test" else "Default",
+        "portal": args.portal,
     }
 
-    build_and_submit(pl.from_pandas(df), submission, fasta_map)
+    build_and_submit(df, submission, fasta_map)
 
 if __name__ == "__main__":
     main()
