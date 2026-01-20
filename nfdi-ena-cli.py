@@ -364,7 +364,7 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
             
             chromosome_gz_path = None
             if seq_count == 1:
-                chromosome_list = f"{last_header}\t{sample}\tchromosome"
+                chromosome_list = f"{last_header}\t{alias}\tchromosome"
                 with tempfile.NamedTemporaryFile(mode="wb+", suffix=".gz", delete=False) as tmp_chromosome_gz:
                     with gzip.GzipFile(fileobj=tmp_chromosome_gz, mode="wb") as gz_file:
                         gz_file.write(chromosome_list.encode("utf-8"))
