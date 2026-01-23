@@ -12,6 +12,7 @@ import requests
 import subprocess
 import os
 from tqdm import tqdm
+import time
 
 # -----------------------------
 # XML CHECKLIST
@@ -170,7 +171,7 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
     samples_submitted = 0
     samples_error = 0
     project_accession = submission.get("study_accession")
-    batch_size = 1000
+    batch_size = 1_000
 
     RESERVED_COLUMNS = {
         "sample_name",
@@ -186,7 +187,7 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
 
     os.makedirs(logs_path, exist_ok=True)
 
-    for offset in tqdm(range(0, len(df), batch_size)):
+    for offset in tqdm(range(0, len(df), batch_size), desc=f"Processing ENA submission batches ({batch_size} samples per batch)"):
 
         root = ET.Element("WEBIN")
 
@@ -311,15 +312,32 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
 
         # --- Submit via POST ---
         if submission["portal"] == "test":
-            url = "https://wwwdev.ebi.ac.uk/ena/submit/webin-v2/submit"
+            url = "https://wwwdev.ebi.ac.uk/ena/submit/webin-v2/submit/queue"
         elif submission["portal"] == "prod":
-            url = "https://www.ebi.ac.uk/ena/submit/webin-v2/submit"
+            url = "https://www.ebi.ac.uk/ena/submit/webin-v2/submit/queue"
 
         auth = (submission["ena_user"], submission["ena_password"])
         
-        headers = {"Accept": "application/xml", "Content-Type": "application/xml"}
+        headers = {"Accept": "application/json"}
 
-        xml_text = requests.post(url, headers=headers, data=xml_bytes, auth=auth).text
+        files = {
+            "file": ("submit.xml", xml_bytes, "text/xml")
+        }
+
+        response = requests.post(url, headers=headers, files=files, auth=auth).json()
+
+        poll_url = response["_links"]["poll"]["href"]
+
+        response = requests.get(poll_url, auth=auth)
+
+        while response.status_code != 200:
+            # print("Metadata being processed on ENA...")
+            time.sleep(5)
+            response = requests.get(poll_url, auth=auth)
+
+        # print("Metadata processed!")
+
+        xml_text = response.text
 
         with open(f"logs/log_{offset}.xml", "w", encoding="utf-8") as f:
             f.write(xml_text)
