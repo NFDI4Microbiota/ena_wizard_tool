@@ -222,7 +222,7 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
 
         for row in df.slice(offset, batch_size).iter_rows(named=True):
             sample = ET.SubElement(sample_set, "SAMPLE", {
-                "alias": str(row["sample_name"]),
+                "alias": str(row["sample_name"])
                 "center_name": ""
             })
 
@@ -335,8 +335,6 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
             time.sleep(5)
             response = requests.get(poll_url, auth=auth)
 
-        # print("Metadata processed!")
-
         xml_text = response.text
 
         with open(f"logs/log_{offset}.xml", "w", encoding="utf-8") as f:
@@ -344,18 +342,30 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
 
         root = ET.fromstring(xml_text)
 
-        errors = [err.text for err in root.findall(".//ERROR")]
+        alias_to_accession = {}
 
-        for e in errors:
-            print(e)
+        # Get accessions from successfully created samples
+        for sample in root.findall(".//SAMPLE"):
+            accession = sample.get("accession")
+            if accession:
+                alias_to_accession[sample.get("alias")] = accession
+
+        error_regex = re.compile(r'alias: "(.+?)".*accession: "(.+?)"')
+        for err in root.findall(".//ERROR"):
+            error_msg = err.text
+            match = error_regex.search(error_msg)
+            if match:
+                alias, accession = match.groups()
+                alias_to_accession[alias] = accession
+                print(f"Found existing sample: {alias} -> {accession}")
+            else:
+                print(f"Submission Error: {error_msg}")
 
         if not project_accession:
-            for project in root.findall("PROJECT"):
+            for project in root.findall(".//PROJECT"):
                 project_accession = project.get("accession")
 
-        for sample in root.findall("SAMPLE"):
-            sample_accession = sample.get("accession")
-            alias = sample.get("alias")
+        for alias, sample_accession in alias_to_accession.items():
             fasta_path = fasta_map[alias]
 
             # Count sequences and get last header
@@ -388,7 +398,7 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
                         gz_file.write(chromosome_list.encode("utf-8"))
                     chromosome_gz_path = tmp_chromosome_gz.name
                 base_manifest += f"\nCHROMOSOME_LIST   {chromosome_gz_path}"
-            
+
             # Submit to ENA
             with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp_manifest:
                 tmp_manifest.write(base_manifest)
