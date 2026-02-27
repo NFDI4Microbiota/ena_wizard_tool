@@ -1,88 +1,431 @@
-Usage example:
+# 🧬 ENA Automatic Submission System
+
+Automated validation and submission pipeline for **Metagenome-Assembled Genomes (MAGs)** to the **European Nucleotide Archive (ENA)**.
+
+This project simplifies ENA submissions by automating:
+
+* metadata validation
+* ENA XML generation
+* metadata submission via API
+* assembly submission using `webin-cli`
+* batch processing of large datasets
+
+---
+
+# ⚡ Quick Start
+
+Clone the repository:
 
 ```bash
-python nfdi-ena-cli.py --metadata example.tsv --fasta-dir fasta --ena-user 'your username' --ena-password 'your password' --study-name 'study example' --study-title 'title for the study' --study-description 'description for the study'
+git clone https://github.com/NFDI4Microbiota/ena_wizard_tool.git
+cd ena_wizard_tool
 ```
 
-# ENA Automatic Submission System
+---
 
-This system aims to **automate the validation and submission of metadata and sequencing data** to the **European Nucleotide Archive (ENA)**, following the metadata standards defined by the **MIXS specification**.
+# 🧩 Installation
 
-## Features
+This project can be installed using either **uv (recommended)** or **pip**.
 
-* **Metadata validation**:
+## Option 1 — Using uv (recommended)
 
-  * Date format verification (ISO 8601).
-  * Expected value checks and unit validation.
-  * Controlled vocabulary and ontology validation (e.g., ENVO, CHEBI, NCBI Taxonomy).
+This is the fastest and most reproducible setup.
 
-* **Automated submission**:
+### Install uv
 
-  * Upload of metadata and sequencing data files.
-  * Integration with the ENA submission API (planned for future phases).
+```bash
+pip install uv
+```
 
-## Initial Scope
+or
 
-In its initial version, this system supports only **Terrestrial metadata**.
+```bash
+curl -Ls https://astral.sh/uv/install.sh | sh
+```
 
-The metadata fields and requirements are based on the MIXS specification and are described below.
+### Install dependencies
+
+```bash
+uv sync
+```
+
+Run commands with:
+
+```bash
+uv run python nfdi-ena-cli.py --help
+```
 
 ---
 
-## Metadata Structure Overview
+## Option 2 — Using pip (classic)
 
-| Category         | Metadata              | Definition                                                                                               | Reference                                                                   | Expected Value / Unit                           | Example                                                                               |                                      |                                                   |
-| ---------------- | --------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------ | ------------------------------------------------- |
-| Project metadata | project\_name         | Name of the project within which the sequencing was organized                                            | [MIXS:0000092](https://w3id.org/mixs/0000092)                               | Free text string                                | Forest soil metagenome                                                                |                                      |                                                   |
-| Site metadata    | collection\_date      | The time of sampling, either as an instance (single point in time) or interval. ISO8601 format compliant | [MIXS:0000011](https://w3id.org/mixs/0000011)                               | YYYY-MM-DD                                      | 2013-03-25T12:42:31+01:00                                                             |                                      |                                                   |
-|                  | collected\_by         | Name of person or institute that collected the sample                                                    | [ENA Reference](https://www.ebi.ac.uk/ena/browser/view/ERC000043)           | Free text string                                | UFZ - Centre for environmental research                                               |                                      |                                                   |
-|                  | geo\_loc\_name        | Geographic location (country/sea and region). Use INSDC/GAZ list                                         | [MIXS:0000010](https://w3id.org/mixs/0000010)                               | Free text or ontology                           | USA: Maryland, Bethesda / [GAZ:00051071](http://purl.obolibrary.org/obo/GAZ_00051071) |                                      |                                                   |
-|                  | lat                   | Latitude in decimal degrees (WGS84)                                                                      | [MIXS:0000009](https://w3id.org/mixs/0000009)                               | Decimal degrees, max 8 decimals                 | -41.373744                                                                            |                                      |                                                   |
-|                  | lon                   | Longitude in decimal degrees (WGS84)                                                                     | [MIXS:0000009](https://w3id.org/mixs/0000009)                               | Decimal degrees, max 8 decimals                 | 146.266145                                                                            |                                      |                                                   |
-|                  | elev                  | Elevation from Earth's surface in meters                                                                 | [MIXS:0000093](https://w3id.org/mixs/0000093)                               | Meter                                           | 100 m                                                                                 |                                      |                                                   |
-|                  | alt                   | Altitude above Earth's surface                                                                           | [MIXS:0000094](https://w3id.org/mixs/0000094)                               | Meter                                           | 100 m                                                                                 |                                      |                                                   |
-|                  | depth                 | Depth below surface (e.g., soil, sediment)                                                               | [MIXS:0000018](https://w3id.org/mixs/0000018)                               | Meter                                           | 100 m                                                                                 |                                      |                                                   |
-|                  | env\_broad\_scale     | Major environmental system(s) (e.g., biome). Use EnvO terms                                              | [MIXS:0000012](https://genomicsstandardsconsortium.github.io/mixs/0000012/) | Ontology terms separated by "                   | "                                                                                     | aquatic biome \[ENVO:00002030]       | terrestrial biome \[ENVO:00000446]                |
-|                  | env\_local\_scale     | Environmental entities near sample. Use subclass of env\_broad\_scale                                    | [MIXS:0000013](https://w3id.org/mixs/0000013)                               | Ontology terms separated by "                   | "                                                                                     | woodland biome \[ENVO:01000175]      | tundra biome \[ENVO:01000180]                     |
-|                  | env\_medium           | Environmental materials in contact with the sample                                                       | [MIXS:0000014](https://genomicsstandardsconsortium.github.io/mixs/0000014/) | Ontology terms separated by "                   | "                                                                                     | arable soil \[ENVO:00005742]         | bulk soil \[ENVO:00005802]                        |
-|                  | chem\_administration  | Chemicals applied to host or site. Use CHEBI IDs                                                         | [MIXS:0000751](https://w3id.org/mixs/0000751)                               | CHEBI;timestamp; multiple values separated by " | "                                                                                     | agar \[CHEBI:2509];2018-05-11T20:00Z | castor oil \[CHEBI:140618];2023-12-07T17:00+02:00 |
-|                  | temp                  | Environmental temperature                                                                                | [MIXS:0000113](https://w3id.org/mixs/0000113)                               | Degree Celsius                                  | 25 degree Celsius                                                                     |                                      |                                                   |
-|                  | salinity              | Environmental salinity                                                                                   | [MIXS:0000183](https://w3id.org/mixs/0000183)                               | Practical salinity unit or percentage           | 25 practical salinity unit                                                            |                                      |                                                   |
-|                  | pH                    | Environmental pH                                                                                         | [MIXS:0001001](https://w3id.org/mixs/0001001)                               | pH value                                        | pH 7.2                                                                                |                                      |                                                   |
-| Sample metadata  | samp\_name            | Local sample identifier (used in sequencing, unique per submitter)                                       | [MIXS:0001107](https://w3id.org/mixs/0001107)                               | Free text                                       | Soil1Sample2Seq2                                                                      |                                      |                                                   |
-|                  | source\_mat\_id       | Unique ID of the material sample used for extraction                                                     | [MIXS:0000001](https://w3id.org/mixs/0000001)                               | Culture collection IDs or unique local ID       | MPI012345                                                                             |                                      |                                                   |
-|                  | samp\_size            | Total amount of sample (volume, mass, area)                                                              | [MIXS:0000001](https://w3id.org/mixs/0000001)                               | ml, g, m²                                       | 2000 ml                                                                               | 1000 g soil                          |                                                   |
-|                  | temp                  | Sample temperature at time of sampling                                                                   | [MIXS:0000113](https://w3id.org/mixs/0000113)                               | Degree Celsius                                  | 25 degree Celsius                                                                     |                                      |                                                   |
-|                  | salinity              | Total concentration of dissolved salts                                                                   | [MIXS:0000183](https://w3id.org/mixs/0000183)                               | Practical salinity unit or percentage           | 25 practical salinity unit                                                            |                                      |                                                   |
-|                  | ph                    | pH of the sample or its aqueous phase                                                                    | [MIXS:0001001](https://w3id.org/mixs/0001001)                               | pH value                                        | 7.2                                                                                   |                                      |                                                   |
-|                  | samp\_taxon\_id       | NCBI taxon ID of sample or control                                                                       | [MIXS:0001320](https://w3id.org/mixs/0001320)                               | NCBI Taxonomy ID                                | 749906                                                                                |                                      |                                                   |
-|                  | samp\_collect\_method | Method of sample collection                                                                              | [MIXS:0001225](https://w3id.org/mixs/0001225)                               | PMID, DOI, URL or free text                     |                                                                                       |                                      |                                                   |
-|                  | microbial\_isolate    | Was a microbial isolate cultured?                                                                        | —                                                                           | Y/N                                             |                                                                                       |                                      |                                                   |
-|                  | microb\_cult\_med     | Microbial culture medium used, if applicable                                                             | [MIXS:0001216](https://w3id.org/mixs/0001216)                               | Ontology terms or free text                     | minimal defined medium \[MCO:0000881]                                                 |                                      |                                                   |
-| Host metadata    | host\_taxid           | NCBI taxon ID of the host                                                                                | [MIXS:0000250](https://w3id.org/mixs/0000250)                               | NCBI Taxonomy ID                                | Homo sapiens \[NCBI\:txid9606]                                                        |                                      |                                                   |
-|                  | host\_common\_name    | Common name of host                                                                                      | [MIXS:0000248](https://w3id.org/mixs/0000248)                               | Free text                                       | human                                                                                 |                                      |                                                   |
-|                  | host\_height          | Height of host                                                                                           | [MIXS:0000264](https://w3id.org/mixs/0000264)                               | cm, mm, m                                       | 177 cm                                                                                |                                      |                                                   |
-|                  | host\_length          | Length of host                                                                                           | [MIXS:0000256](https://w3id.org/mixs/0000256)                               | cm, mm, m                                       | 100 cm                                                                                |                                      |                                                   |
-|                  | host\_tot\_mass       | Total mass of the host                                                                                   | [MIXS:0000263](https://w3id.org/mixs/0000263)                               | kg, g                                           | 77 kg                                                                                 |                                      |                                                   |
-|                  | host\_body\_site      | Body site from where sample was collected                                                                | [MIXS:0000867](https://w3id.org/mixs/0000867)                               | FMA or UBERON ontology                          | gut \[FMA:45615]                                                                      |                                      |                                                   |
-|                  | host\_body\_product   | Substance produced by the host body (e.g. mucus, blood)                                                  | [MIXS:0000867](https://w3id.org/mixs/0000867)                               | FMA or UBERON ontology                          | mucus \[FMA:66938]                                                                    | blood plasma \[UBERON:0001969]       |                                                   |
-|                  | host\_age             | Age of the host at collection                                                                            | [MIXS:0000255](https://w3id.org/mixs/0000255)                               | year, day, hour                                 | 28 y                                                                                  |                                      |                                                   |
-|                  | host\_sex             | Sex of the host                                                                                          | [MIXS:0000811](https://w3id.org/mixs/0000811)                               | male, female, unknown                           | female                                                                                |                                      |                                                   |
-|                  | host\_diet            | Diet of the host                                                                                         | [MIXS:0000869](https://w3id.org/mixs/0000869)                               | Free text or ontology                           | omnivore \[ecocore:00000082]                                                          |                                      |                                                   |
-|                  | host\_disease\_stat   | Diagnosed disease(s) of the host                                                                         | [MIXS:0000031](https://w3id.org/mixs/0000031)                               | Free text or Disease Ontology                   | avian influenza                                                                       |                                      |                                                   |
+Create a virtual environment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Linux / macOS
+# .venv\\Scripts\\activate    # Windows
+```
+
+Install dependencies:
+
+```bash
+pip install -e .
+```
 
 ---
 
-## Future Work
+## External requirements
 
-* Expansion to other MIXS packages (e.g., host-associated, built environment).
-* Full ENA submission automation (metadata XML generation, file uploads).
-* GUI interface for simplified data upload.
+Required tools:
+
+* Java (JRE/JDK)
+* ENA webin-cli JAR
+
+Expected location:
+
+```
+App/webin-cli-9.0.1.jar
+```
 
 ---
 
-## References
+# 📦 Project Overview
 
-* [MIXS Standard - GSC](https://www.nature.com/articles/nbt1366)
-* [MIXS Term Browser](https://w3id.org/mixs/)
-* [ENA Submission Portal](https://www.ebi.ac.uk/ena/browser/submit)
+This repository is organized into two main components:
+
+| Component                | Description                                      | Status                       |
+| ------------------------ | ------------------------------------------------ | ---------------------------- |
+| CLI Submission Tool      | Automated validation + ENA submission            | ✔ Available                  |
+| Web Application (`App/`) | User-friendly interface for submission workflows | 🚧 Documentation coming soon |
+
+> ⚠️ This README currently documents **only the CLI submission tool**.
+> A dedicated section for the web application will be added later.
+
+---
+
+# ⚙️ CLI Submission Tool
+
+The CLI performs the full MAG submission workflow to ENA.
+
+## Main Features
+
+### ✔ Metadata validation
+
+Validation is automatically performed using the ENA checklist XML:
+
+* mandatory field checking
+* regex validation
+* enum validation
+* row-level error reporting
+
+Checklist currently supported:
+
+```
+ERC000047 (MAG checklist)
+```
+
+### ✔ FASTA discovery
+
+The tool automatically maps metadata entries to FASTA files:
+
+```
+sample_name ⇄ *.fasta.gz
+```
+
+Example:
+
+```
+sample_001.fasta.gz
+```
+
+### ✔ ENA metadata submission
+
+The CLI automatically:
+
+* generates ENA-compliant XML
+* creates PROJECT (if needed)
+* creates SAMPLE objects
+* attaches checklist attributes
+* submits through WEBIN v2 API
+
+Supported portals:
+
+* ENA TEST
+* ENA PRODUCTION
+
+### ✔ Assembly submission (webin-cli)
+
+After metadata submission:
+
+* manifest files are generated automatically
+* assemblies are submitted using:
+
+```
+webin-cli (genome context)
+```
+
+Special handling:
+
+* single-contig assemblies automatically generate chromosome lists.
+
+### ✔ Logging system
+
+All submission logs are saved under:
+
+```
+logs/
+```
+
+Generated files:
+
+```
+log_<batch>.xml
+success.txt
+error.txt
+```
+
+---
+
+# 📂 Input Data
+
+## Metadata table
+
+Format:
+
+```
+TSV (tab-separated)
+```
+
+Example:
+
+```
+example.tsv
+```
+
+### Required core fields (simplified)
+
+| Field             | Description              |
+| ----------------- | ------------------------ |
+| sample_name       | Unique sample identifier |
+| organism          | Scientific organism name |
+| tax_id            | NCBI taxonomy ID         |
+| genome coverage   | Sequencing depth         |
+| platform          | Sequencing platform      |
+| assembly software | Assembly software used   |
+
+Additional columns are automatically added as ENA sample attributes.
+
+## FASTA directory
+
+Example structure:
+
+```
+fasta/
+ ├── sample1.fasta.gz
+ ├── sample2.fasta.gz
+```
+
+---
+
+# 🚀 CLI Usage
+
+## Basic submission example
+
+```bash
+python nfdi-ena-cli.py \
+  --metadata example.tsv \
+  --fasta-dir fasta \
+  --ena-user "your_username" \
+  --ena-password "your_password" \
+  --study-name "study example" \
+  --study-title "title for the study" \
+  --study-description "description for the study"
+```
+
+## Using an existing study accession
+
+```bash
+python nfdi-ena-cli.py \
+  --metadata example.tsv \
+  --fasta-dir fasta \
+  --ena-user USER \
+  --ena-password PASS \
+  --study-accession PRJEBXXXX
+```
+
+## Production submission
+
+Default portal:
+
+```
+test
+```
+
+To submit to production:
+
+```bash
+--portal prod
+```
+
+⚠️ Always validate using the TEST portal first.
+
+---
+
+# 🧠 Internal Workflow
+
+```
+Metadata TSV
+      ↓
+Checklist validation
+      ↓
+FASTA matching
+      ↓
+ENA XML generation
+      ↓
+Metadata submission (WEBIN API)
+      ↓
+Manifest generation
+      ↓
+webin-cli assembly submission
+```
+
+---
+
+# 🧱 Automatic Metadata Handling
+
+The CLI automatically:
+
+* injects required ENA fields
+* appends user-defined columns as SAMPLE_ATTRIBUTES
+* ignores reserved internal columns
+
+This allows metadata extension without code modification.
+
+---
+
+# 📊 Batch Processing
+
+Large submissions are automatically split:
+
+```
+batch_size = 1000 samples
+```
+
+Each batch generates independent logs.
+
+---
+
+# 🔒 Security Notes
+
+Credentials are passed via CLI arguments:
+
+```
+--ena-user
+--ena-password
+```
+
+Recommended usage:
+
+```bash
+export ENA_USER=xxx
+export ENA_PASS=xxx
+```
+
+---
+
+# ⚠️ Common Errors
+
+## Missing FASTA files
+
+```
+Missing FASTA files for: sample_X
+```
+
+Cause:
+
+* FASTA filename does not match `sample_name`.
+
+## Regex mismatch errors
+
+Common causes:
+
+* invalid date format
+* wrong numeric format
+* ontology formatting errors
+
+## webin-cli errors
+
+Check:
+
+```
+logs/error.txt
+```
+
+Typical causes:
+
+* invalid manifest fields
+* ENA temporary API issues
+* missing metadata values
+
+---
+
+# 🧪 Development Notes
+
+Main internal functions:
+
+| Function               | Purpose             |
+| ---------------------- | ------------------- |
+| `load_fields_from_xml` | Parse ENA checklist |
+| `validate_dataframe`   | Metadata validation |
+| `collect_fastas`       | FASTA mapping       |
+| `build_and_submit`     | Submission engine   |
+
+---
+
+# 🌐 Web Application (Coming Soon)
+
+The `App/` directory contains the web application.
+
+Documentation to be added:
+
+* architecture overview
+* local run instructions
+* deployment guide
+* user workflow
+
+---
+
+# 🧭 Roadmap
+
+## Near future
+
+* Full web interface documentation
+* Interactive metadata validation
+* Submission progress tracking
+* Improved error visualization
+
+## Future expansions
+
+* Support for multiple ENA checklists
+* MIXS package auto-detection
+* Ontology live validation (ENVO/CHEBI)
+* Parallelized submission engine
+
+---
+
+# 📚 References
+
+* ENA Submission Portal: [https://www.ebi.ac.uk/ena/browser/submit](https://www.ebi.ac.uk/ena/browser/submit)
+* ENA Checklist ERC000047: [https://www.ebi.ac.uk/ena/browser/view/ERC000047](https://www.ebi.ac.uk/ena/browser/view/ERC000047)
+* MIXS Standard: [https://www.nature.com/articles/nbt1366](https://www.nature.com/articles/nbt1366)
+* MIXS Term Browser: [https://w3id.org/mixs/](https://w3id.org/mixs/)
+
+---
+
+# 👨‍🔬 Intended Users
+
+* Metagenomics researchers
+* Bioinformatics pipelines
+* Large-scale MAG submission projects
+* Institutional data submission workflows
