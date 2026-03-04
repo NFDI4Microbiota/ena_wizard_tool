@@ -222,7 +222,7 @@ def build_and_submit(df: pl.DataFrame, submission: dict, fasta_map: dict):
 
         for row in df.slice(offset, batch_size).iter_rows(named=True):
             sample = ET.SubElement(sample_set, "SAMPLE", {
-                "alias": str(row["sample_name"])
+                "alias": str(row["sample_name"]),
                 "center_name": ""
             })
 
