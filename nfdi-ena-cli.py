@@ -448,17 +448,17 @@ def main():
 #################################################################################################################################################################################
 #################################################################################################################################################################################
 	''')
-    parser = argparse.ArgumentParser(description="ENA MAG submission CLI")
+    parser = argparse.ArgumentParser(description="Automated validation and submission pipeline for Metagenome-Assembled Genomes (MAGs) to the European Nucleotide Archive (ENA)")
 
-    parser.add_argument("--metadata", required=True, type=Path)
-    parser.add_argument("--fasta-dir", required=True, type=Path)
-    parser.add_argument("--ena-user", required=True)
-    parser.add_argument("--ena-password", required=True)
-    parser.add_argument("--portal", choices=["test", "prod"], default="test")
-    parser.add_argument("--study-accession")
-    parser.add_argument("--study-name")
-    parser.add_argument("--study-title")
-    parser.add_argument("--study-description")
+    parser.add_argument("--metadata", required=True, type=Path, help="Path to TSV table storing metadata.")
+    parser.add_argument("--fasta-dir", required=True, type=Path, help="Path to the directory containing compressed FASTA (.fasta.gz) files.")
+    parser.add_argument("--ena-user", required=True, help="Username for Webin submission Portal.")
+    parser.add_argument("--ena-password", required=True, help="Password for Webin submission Portal.")
+    parser.add_argument("--portal", choices=["test", "prod"], default="test", help="Portal for submittion, 'test' for testing or 'prod' for production. Default: 'test'")
+    parser.add_argument("--study-accession", help="If you are submitting MAGs to a existing study, please provide the study accession number.")
+    parser.add_argument("--study-name", help="Name for the study. Required if you are creating a new study.")
+    parser.add_argument("--study-title", help="Title longer than 20 characters for the study. Required if you are creating a new study.")
+    parser.add_argument("--study-description", help="Description longer than 20 characters for the study. Required if you are creating a new study.")
 
     args = parser.parse_args()
 
@@ -470,8 +470,13 @@ def main():
     fasta_map = collect_fastas(args.fasta_dir)
     missing = set(df["sample_name"]) - set(fasta_map)
 
+    if len(args.study_title) < 20 or len(args.study_description) < 20:
+        print(f"ERROR: Study title or description less than 20 characters.")
+        return
+
     if missing:
-        raise RuntimeError(f"Missing FASTA files for: {', '.join(missing)}")
+        print(f"ERROR: Missing FASTA files for: {', '.join(missing)}")
+        return
 
     submission = {
         "study_accession": args.study_accession,

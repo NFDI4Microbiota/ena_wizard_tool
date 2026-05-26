@@ -77,12 +77,13 @@ pip install -e .
 
 ## External requirements
 
-Required tools:
+You need Java for the application be able to use ENA Webin-CLI. You can install in Linux with:
 
-* Java (JRE/JDK)
-* ENA webin-cli JAR
+```bash
+sudo apt install default-jre
+```
 
-Expected location:
+And you need the JAR file from ENA Webin-CLI. Expected location:
 
 ```
 App/webin-cli-9.0.1.jar
@@ -234,21 +235,21 @@ fasta/
 
 ```bash
 python nfdi-ena-cli.py \
-  --metadata example.tsv \
-  --fasta-dir fasta \
-  --ena-user "your_username" \
-  --ena-password "your_password" \
-  --study-name "study example" \
-  --study-title "title for the study" \
-  --study-description "description for the study"
+  --metadata examples/metadata.tsv \
+  --fasta-dir examples/fasta \
+  --ena-user 'your_username' \
+  --ena-password 'your_password' \
+  --study-name 'study example' \
+  --study-title 'title for the study longer than 20 characters' \
+  --study-description 'description for the study longer than 20 characters'
 ```
 
 ## Using an existing study accession
 
 ```bash
 python nfdi-ena-cli.py \
-  --metadata example.tsv \
-  --fasta-dir fasta \
+  --metadata examples/metadata.tsv \
+  --fasta-dir examples/fasta \
   --ena-user USER \
   --ena-password PASS \
   --study-accession PRJEBXXXX
