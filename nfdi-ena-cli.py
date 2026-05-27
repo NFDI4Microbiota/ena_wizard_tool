@@ -470,9 +470,13 @@ def main():
     fasta_map = collect_fastas(args.fasta_dir)
     missing = set(df["sample_name"]) - set(fasta_map)
 
-    if len(args.study_title) < 20 or len(args.study_description) < 20:
-        print(f"ERROR: Study title or description less than 20 characters.")
-        return
+    if not args.study_accession:
+        if not args.study_name:
+            print(f"ERROR: Study name is empty.")
+            return
+        if len(args.study_title) < 20 or len(args.study_description) < 20:
+            print(f"ERROR: Study title or description less than 20 characters.")
+            return
 
     if missing:
         print(f"ERROR: Missing FASTA files for: {', '.join(missing)}")
