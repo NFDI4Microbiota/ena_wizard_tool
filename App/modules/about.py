@@ -1,6 +1,4 @@
 # modules/about.py
-import io
-import pandas as pd
 import streamlit as st
 from utils.css_injection import inject_css
 
@@ -8,20 +6,14 @@ from utils.css_injection import inject_css
 # Configuráveis
 # =========================
 CONTACT_EMAIL = "you@example.org"
-CONTACT_SLACK = "Slack: #ena-submission"
 CONTACT_SITE  = "https://www.ebi.ac.uk/ena/browser/submit"
-ORG_NAME      = "NFDI / Your Lab"
-APP_NAME      = "NFDI ENA Submission Tool"
-SUPPORTED_SCOPE = "Terrestrial package (MIXS)"
-LICENSE       = "Apache-2.0 (example — adjust if needed)"
+ORG_NAME      = "NFDI4Microbiota / Microbial Data Science Group — UFZ"
+APP_NAME      = "ENA MAG Submission Wizard"
+SUPPORTED_SCOPE = "MAGs · MIMAGS · ERC000047"
+LICENSE       = "MIT"
 
-# =========================
-# Pequeno CSS extra só pra garantir fluidez,
-# respeitando seu style.css (classes de container/card/etc.)
-# =========================
 EXTRA_CSS = """
 <style>
-/* espaçamentos mais generosos e tipografia consistente */
 .container-max { max-width: 1100px; margin: 0 auto; }
 .section { margin: 2.2rem 0; }
 .lead { font-size: 1.05rem; line-height: 1.6; }
@@ -29,8 +21,6 @@ EXTRA_CSS = """
 .h2 { font-size: 1.6rem; font-weight: 700; margin-bottom: .75rem; }
 .h3 { font-size: 1.15rem; font-weight: 700; margin: 1rem 0 .25rem; }
 .badge { display:inline-block; padding:.25rem .6rem; border-radius:999px; background:#eef2ff; color:#3730a3; font-weight:600; font-size:.85rem }
-
-/* hero mais fluido */
 .hero {
   padding: 2.2rem 1.2rem;
   text-align: center;
@@ -40,93 +30,20 @@ EXTRA_CSS = """
 .hero-small { padding: 1.8rem 1rem; }
 .hero-title { font-size: 2.05rem; font-weight: 800; margin-bottom: .35rem; }
 .hero-sub { font-size: 1.05rem; color: #4b5563; margin: 0 auto .5rem; max-width: 820px; }
-
-/* grids responsivos */
-.grid-2, .grid-3 {
-  display: grid;
-  gap: 1rem;
-}
+.grid-2, .grid-3 { display: grid; gap: 1rem; }
 .grid-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
 .grid-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
-@media (max-width: 900px) {
-  .grid-3 { grid-template-columns: 1fr 1fr; }
-}
-@media (max-width: 640px) {
-  .grid-2, .grid-3 { grid-template-columns: 1fr; }
-}
-
-/* cartões */
-.card {
-  border: 1px solid #e5e7eb;
-  border-radius: 14px;
-  padding: 1rem 1rem;
-  background: #fff;
-  box-shadow: 0 1px 0 rgba(0,0,0,.02);
-}
+@media (max-width: 900px) { .grid-3 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 640px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+.card { border: 1px solid #e5e7eb; border-radius: 14px; padding: 1rem 1rem; background: #fff; box-shadow: 0 1px 0 rgba(0,0,0,.02); }
 .card h4 { margin: 0 0 .35rem; font-size: 1.05rem; }
 .card .muted { font-size: .95rem; }
-
-/* listas mais compactas */
 ul.list, ol.list { padding-left: 1.1rem; margin: .25rem 0; }
 ul.list li, ol.list li { margin: .25rem 0; }
-
-/* callout “note” */
-.note {
-  border-left: 4px solid #93c5fd;
-  background: #f0f7ff;
-  padding: .6rem .8rem;
-  border-radius: 8px;
-}
-
-/* blocos de contato e créditos */
-.footer-card {
-  border: 1px dashed #d1d5db;
-  background: #fafafa;
-  border-radius: 14px;
-  padding: 1rem 1rem;
-}
+.note { border-left: 4px solid #93c5fd; background: #f0f7ff; padding: .6rem .8rem; border-radius: 8px; }
+.footer-card { border: 1px dashed #d1d5db; background: #fafafa; border-radius: 14px; padding: 1rem 1rem; }
 </style>
 """
-
-# =========================
-# Sample CSV (permanece o mesmo)
-# =========================
-def _sample_csv() -> pd.DataFrame:
-    rows = [
-        {
-            "project_name": "Forest soil metagenome",
-            "collection_date": "2024-05-18",
-            "geo_loc_name": "Germany: Saxony",
-            "lat": 51.0504,
-            "lon": 13.7373,
-            "env_broad_scale": "ENVO:00000446",
-            "env_local_scale": "ENVO:01000175",
-            "env_medium": "ENVO:00005742",
-            "samp_name": "SoilPlot_A1",
-            "samp_taxon_id": "749906",
-            "experiment": "shotgun",
-            "organism": "metagenome",
-            "tax_id": "256318",
-            "ENA_CHECKLIST": "",
-        },
-        {
-            "project_name": "Forest soil metagenome",
-            "collection_date": "2024-05-18",
-            "geo_loc_name": "Germany: Saxony",
-            "lat": 51.0501,
-            "lon": 13.7399,
-            "env_broad_scale": "ENVO:00000446",
-            "env_local_scale": "ENVO:01000175",
-            "env_medium": "ENVO:00005742",
-            "samp_name": "SoilPlot_A2",
-            "samp_taxon_id": "749906",
-            "experiment": "shotgun",
-            "organism": "metagenome",
-            "tax_id": "256318",
-            "ENA_CHECKLIST": "",
-        },
-    ]
-    return pd.DataFrame(rows)
 
 
 def runUI():
@@ -140,7 +57,7 @@ def runUI():
           <section class="hero hero-small">
             <div class="hero-title">About & Help</div>
             <div class="hero-sub">
-              Everything you need to work efficiently with the <b>{APP_NAME}</b>.
+              Everything you need to know about the <b>{APP_NAME}</b>.
               <span class="badge" style="margin-left:.5rem;">{SUPPORTED_SCOPE}</span>
             </div>
           </section>
@@ -152,27 +69,29 @@ def runUI():
 
     # ===== Overview =====
     st.markdown(
-        f"""
+        """
         <div class="container-max section">
           <div class="h2">ℹ️ Overview</div>
           <p class="lead">
-            The <b>{APP_NAME}</b> helps you create and validate metadata for submissions to the
-            European Nucleotide Archive (ENA), following MIXS standards. Start from a clean
-            template or upload CSV/Excel; the app checks required fields, formats (regex),
-            and simple ontology shapes (ENVO/CHEBI/NCBI Taxonomy), then lets you download a clean CSV.
+            The ENA MAG Submission Wizard is an end-to-end submission pipeline for
+            Metagenome-Assembled Genomes (MAGs). It takes your assembled bins and
+            bioinformatics tool outputs — CheckM quality scores, GTDB-Tk taxonomy — and
+            walks you through metadata completion, validation, and direct submission to the
+            European Nucleotide Archive (ENA) via Webin, without writing a single line of XML
+            or running Webin-CLI manually.
           </p>
           <div class="grid-3">
             <div class="card">
-              <h4>Focus</h4>
-              <p class="muted">Reduce formatting friction and catch errors early.</p>
+              <h4>Standard</h4>
+              <p class="muted">MIMAGS (ERC000047) — the Genomic Standards Consortium minimum information package for MAGs.</p>
             </div>
             <div class="card">
-              <h4>Scope</h4>
-              <p class="muted">{SUPPORTED_SCOPE}</p>
+              <h4>Submission target</h4>
+              <p class="muted">ENA via Webin REST API (samples & project) and Webin-CLI (genome assemblies). Testing and Production portals supported.</p>
             </div>
             <div class="card">
-              <h4>Future</h4>
-              <p class="muted">Automated ENA API submissions and job tracking.</p>
+              <h4>Scale</h4>
+              <p class="muted">Up to 1,000 MAGs per submission. Jobs run in the background — close the browser and check back in Jobs.</p>
             </div>
           </div>
         </div>
@@ -180,7 +99,48 @@ def runUI():
         unsafe_allow_html=True,
     )
 
-    # ===== Who is it for + File formats (lado a lado) =====
+    with st.container(border=True):
+        st.markdown("**Authors**")
+        st.markdown(
+            """
+            This platform was developed by:
+
+            - **Breno L. S. de Almeida** (corresponding author; brenoslivio@usp.br)
+            - **Anderson P. Avila-Santos** (corresponding author; anderson.santos@ufz.de)
+            - Martin Bole
+            - Sanchita Kamath
+            - Peter F. Stadler
+            - André C. P. L. F. de Carvalho
+            - **Ulisses Rocha** (corresponding author; ulisses.rocha@ufz.de)
+
+            Please cite the associated publication when using this platform in academic work.
+            """
+        )
+
+    with st.container(border=True):
+        st.markdown("**Acknowledgements**")
+        st.markdown(
+            """
+            This work has been funded by the Canadian International Development Research Centre (IDRC) under the Grant Agreement 109981,
+            and the UK government’s Foreign, Commonwealth and Development Office. The views expressed here do not necessarily reflect 
+            those of the UK government’s Foreign, Commonwealth and Development Office, IDRC, or IDRC’s Board of Governors. 
+            Breno L. S. de Almeida has been funded by the São Paulo Research Foundation (FAPESP), grant #2024/10958-1, and the 
+            Google PhD Fellowship.
+
+            We also acknowledge open-source libraries and tools that made this work possible.
+            """
+        )
+
+
+    with st.container(border=True):
+        st.markdown("**Data Availability**")
+        st.markdown(
+            """
+            The source code of the platform is available at: https://github.com/NFDI4Microbiota/ena_wizard_tool
+            """
+        )
+
+    # ===== Who is it for + File formats =====
     st.markdown('<div class="container-max section">', unsafe_allow_html=True)
     c1, c2 = st.columns(2, gap="large")
     with c1:
@@ -188,23 +148,28 @@ def runUI():
             """
             <div class="h2">🎯 Who is this for?</div>
             <ul class="list">
-              <li>Researchers preparing environmental/terrestrial metadata aligned with MIXS.</li>
-              <li>Lab managers curating datasets before ENA submission.</li>
-              <li>Data stewards supporting teams with standard-compliant metadata.</li>
+              <li>Bioinformaticians who have assembled MAGs and need to deposit them in ENA.</li>
+              <li>Research groups running metagenomics studies under NFDI4Microbiota or similar consortia.</li>
+              <li>Data stewards managing bulk MAG submissions for large environmental projects.</li>
             </ul>
+            <p class="muted" style="margin-top:.5rem;">
+              Assumed background: you have run a standard MAG workflow
+              (assembly → binning → CheckM/CheckM2 quality → GTDB-Tk taxonomy) and want
+              to deposit the results in ENA with minimal friction.
+            </p>
             """,
             unsafe_allow_html=True,
         )
     with c2:
         st.markdown(
             """
-            <div class="h2">📄 File formats & schema</div>
+            <div class="h2">📄 File formats</div>
             <ul class="list">
-              <li><b>Upload:</b> CSV (.csv) or Excel (.xlsx); UTF-8 for CSV.</li>
-              <li><b>Header row:</b> must contain column names; unknown columns are ignored.</li>
-              <li><b>Dates:</b> ISO 8601 (<code>YYYY-MM-DD</code> or full timestamp).</li>
-              <li><b>Coordinates:</b> lat/lon in decimal degrees (WGS84); commas auto-normalized.</li>
-              <li><b>Ontologies:</b> shape checks like <code>ENVO:00000446</code>, <code>CHEBI:2509</code>, TaxIDs.</li>
+              <li><b>Metadata:</b> TSV (.tsv) — download the built-in template from the Submit tab.</li>
+              <li><b>Genomes:</b> gzip-compressed FASTA (<code>.fasta.gz</code>) — one file per MAG; filename must match <code>sample_name</code>.</li>
+              <li><b>CheckM v1:</b> <code>storage.tsv</code> — columns <code>Bin Id</code>, <code>Completeness</code>, <code>Contamination</code>.</li>
+              <li><b>CheckM2:</b> <code>quality_report.tsv</code> — columns <code>Name</code>, <code>Completeness</code>, <code>Contamination</code>.</li>
+              <li><b>GTDB-Tk:</b> <code>gtdbtk.bac120.summary.tsv</code> or <code>gtdbtk.ar53.summary.tsv</code> — columns <code>user_genome</code>, <code>classification</code>.</li>
             </ul>
             """,
             unsafe_allow_html=True,
@@ -218,152 +183,136 @@ def runUI():
           <div class="h2">✅ Validation rules</div>
           <div class="grid-3">
             <div class="card">
-              <h4>Required fields</h4>
+              <h4>Mandatory fields</h4>
               <ul class="list">
-                <li>Marked with an asterisk (*) in the editor.</li>
-                <li>Empty values are flagged per row.</li>
-                <li>Missing required <i>columns</i> are also reported.</li>
+                <li>Derived directly from the ERC000047 XML checklist.</li>
+                <li>Mandatory columns are marked with * in the editor.</li>
+                <li>Empty mandatory cells are reported row by row.</li>
               </ul>
             </div>
             <div class="card">
-              <h4>Regex & data types</h4>
+              <h4>Regex patterns</h4>
               <ul class="list">
-                <li>Per-field pattern (e.g., ISO date).</li>
-                <li>Number/date columns coerced and validated.</li>
-                <li>Custom messages for mismatches.</li>
+                <li>Field-specific patterns from ERC000047 (e.g., genome coverage must be a positive number).</li>
+                <li>Geographic coordinates, dates, and accession IDs are checked against their respective patterns.</li>
               </ul>
             </div>
             <div class="card">
-              <h4>Semantic shapes</h4>
+              <h4>Controlled vocabularies</h4>
               <ul class="list">
-                <li>ENVO: <code>ENVO:0000000</code> (7 digits).</li>
-                <li>CHEBI: <code>CHEBI:12345</code> (optional <code>;timestamp</code>).</li>
-                <li>TaxIDs: digits only (1–9 digits).</li>
+                <li>Enum fields (e.g., <i>assembly quality</i>, <i>completeness software</i>) only accept values listed in the checklist.</li>
+                <li>Invalid values are flagged with the full list of accepted terms.</li>
               </ul>
             </div>
           </div>
-          <div class="note muted" style="margin-top:.6rem;">
-            Note: We validate ID <i>shapes</i>, not remote term existence.
+          <div class="note muted" style="margin-top:.75rem;">
+            Validation runs against the locally cached ERC000047 XML. The checklist is parsed dynamically — if ENA updates it, updating the XML file is all that is needed.
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # ===== Common errors (expander) =====
-    with st.expander("🚑 Common errors & quick fixes", expanded=True):
-        st.markdown(
-            """
-            - **Dates not in ISO 8601** → Use `YYYY-MM-DD` (e.g., `2024-05-18`).  
-            - **Lat/Lon with comma** → Use “Auto-fix common issues” to normalize commas to dots.  
-            - **Empty required fields** → Fill all starred columns.  
-            - **Duplicate project name** → Project key must be unique when used as identifier.  
-            - **Ontology shape mismatch** → Patterns like `ENVO:00000446`, `CHEBI:2509`.  
-            - **Trailing blank row** → The editor keeps one empty row; it’s removed on export.
-            """
-        )
-
-    # ===== Getting started (2 colunas: passos + sample) =====
-    st.markdown('<div class="container-max section">', unsafe_allow_html=True)
-    g1, g2 = st.columns([1.2, 1], gap="large")
-    with g1:
-        st.markdown(
-            """
-            <div class="h2">🚀 Getting started</div>
-            <ol class="list">
-              <li>Open <b>Create & Validate Metadata</b>.</li>
-              <li><b>Upload</b> your CSV/Excel or click <b>Start new</b> for an empty template.</li>
-              <li>Use the toolbar to add rows or select & delete.</li>
-              <li>Fix red-flagged cells; check “⚠︎ issues” and the Validation panel.</li>
-              <li>When issues = 0, <b>Download CSV</b>.</li>
-            </ol>
-            """,
-            unsafe_allow_html=True,
-        )
-    with g2:
-        st.markdown('<div class="h3">📥 Sample CSV</div>', unsafe_allow_html=True)
-        sample_df = _sample_csv()
-        buf = io.StringIO(); sample_df.to_csv(buf, index=False)
-        st.download_button(
-            "Download sample_metadata.csv",
-            buf.getvalue().encode("utf-8"),
-            file_name="sample_metadata.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-    st.markdown('</div>', unsafe_allow_html=True)
+    # ===== Getting started =====
+    st.markdown(
+        """
+        <div class="container-max section">
+          <div class="h2">🚀 Getting started</div>
+          <ol class="list">
+            <li>Go to <b>Submit</b> and download the metadata template (or upload your existing TSV).</li>
+            <li>In <b>Metadata assistance → Import quality files</b>, upload your CheckM / CheckM2 output to auto-fill completeness and contamination scores.</li>
+            <li>Upload your GTDB-Tk summary to auto-fill organism names.</li>
+            <li>Use <b>Taxonomy resolver</b> to batch-fill NCBI taxon IDs from ENA, and <b>ENVO term search</b> to find the right environmental context codes.</li>
+            <li>Click <b>Validate metadata</b> — fix any errors reported in the table.</li>
+            <li>Upload one <code>.fasta.gz</code> file per MAG (filenames must match <code>sample_name</code>).</li>
+            <li>Fill in your ENA Webin credentials and study information, then click <b>Submit to ENA</b>.</li>
+            <li>Monitor progress and retrieve accession numbers in the <b>Jobs</b> tab.</li>
+          </ol>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # ===== FAQ =====
     st.markdown('<div class="container-max section"><div class="h2">❓ FAQ</div></div>', unsafe_allow_html=True)
-    with st.expander("Why does the table always show an empty row at the bottom?"):
-        st.write("It’s a convenience row for quick data entry. It is excluded when you download the CSV.")
-    with st.expander("Do I need to include all MIXS fields?"):
-        st.write("No. Only the required set is enforced; optional fields are allowed and validated if present.")
-    with st.expander("Can I upload Excel files with multiple sheets?"):
-        st.write("Currently the first sheet is read. Save/export the sheet you need, or use CSV.")
-    with st.expander("Does the app validate that ENVO/CHEBI IDs actually exist?"):
-        st.write("It validates the ID shape only. Full ontology resolution is out of scope for now.")
-    with st.expander("What about ENA checklists?"):
-        st.write("The column is supported for future API-based submission flows. Values are not enforced here.")
-
-    # ===== Roadmap + Privacy (lado a lado) =====
-    st.markdown('<div class="container-max section">', unsafe_allow_html=True)
-    r1, r2 = st.columns(2, gap="large")
-    with r1:
-        st.markdown(
-            """
-            <div class="h2">🗺️ Roadmap</div>
-            <ul class="list">
-              <li>More MIXS packages (host-associated, built environment).</li>
-              <li>Checklist-aware export (ENA XML generation).</li>
-              <li>Direct ENA API submissions & job monitoring.</li>
-              <li>UI refinements and accessibility improvements.</li>
-            </ul>
-            """,
-            unsafe_allow_html=True,
+    with st.expander("Which ENA checklist does this tool use?"):
+        st.write(
+            "ERC000047 — the MIMAGS package from the Genomic Standards Consortium. "
+            "It defines the minimum information required for a Metagenome-Assembled Genome submission."
         )
-    with r2:
+    with st.expander("Do I need a pre-existing ENA study (project)?"):
+        st.write(
+            "No. You can create a new study as part of the submission by providing a study name, title, "
+            "and description. If you already have a study accession (e.g. PRJEB12345), select "
+            "'Existing study accession' and paste it in."
+        )
+    with st.expander("What is the Testing portal and when should I use it?"):
+        st.write(
+            "ENA provides a testing environment at wwwdev.ebi.ac.uk that accepts submissions but does not "
+            "create public records. Always run a test submission first to catch any issues before using the "
+            "Production portal."
+        )
+    with st.expander("My MAG is a single contig — do I need to create a chromosome list?"):
+        st.write(
+            "No. The tool detects single-contig FASTA files automatically and generates the required "
+            "chromosome list file on your behalf before passing it to Webin-CLI."
+        )
+    with st.expander("What happens if some MAGs succeed and others fail?"):
+        st.write(
+            "Each MAG is submitted independently via Webin-CLI. Successes and errors are logged "
+            "separately in the job directory. Check the Jobs tab for a breakdown and the full Webin output."
+        )
+    with st.expander("Can I resubmit a failed MAG without re-running everything?"):
+        st.write(
+            "Currently each submission session is independent. For partial re-submissions, filter your "
+            "metadata TSV to only the failed samples and start a new submission."
+        )
+    with st.expander("Is there a limit on how many MAGs I can submit at once?"):
+        st.write("Yes — 1,000 rows per submission session.")
+
+    # ===== Privacy + Contact =====
+    st.markdown('<div class="container-max section">', unsafe_allow_html=True)
+    p1, p2 = st.columns(2, gap="large")
+    with p1:
         st.markdown(
             """
             <div class="h2">🔐 Privacy & Data Handling</div>
             <p class="muted">
-              Files you upload are used only for validation in your session.
-              Avoid sensitive content in examples and shared exports.
+              Uploaded FASTA files are written to a temporary directory and deleted automatically
+              after the submission job completes. Metadata and credentials are held only in your
+              session and the background job queue — they are not stored permanently.
+              Do not submit data you are not authorised to make public.
             </p>
+            """,
+            unsafe_allow_html=True,
+        )
+    with p2:
+        st.markdown(
+            f"""
+            <div class="h2">📬 Contact & Support</div>
+            <div class="footer-card">
+              <ul class="list">
+                <li>Email: <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a></li>
+                <li>ENA portal: <a href="{CONTACT_SITE}" target="_blank">{CONTACT_SITE}</a></li>
+              </ul>
+            </div>
             """,
             unsafe_allow_html=True,
         )
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ===== Contact (cartão) =====
-    st.markdown(
-        f"""
-        <div class="container-max section">
-          <div class="h2">📬 Contact & Support</div>
-          <div class="footer-card">
-            <ul class="list">
-              <li>Email: <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a></li>
-              <li>{CONTACT_SLACK}</li>
-              <li>ENA portal: <a href="{CONTACT_SITE}" target="_blank">{CONTACT_SITE}</a></li>
-            </ul>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # ===== Credits & Citation (inclui seus créditos) =====
+    # ===== Credits =====
     st.markdown(
         f"""
         <div class="container-max section">
           <div class="h2">🎓 Credits & Citation</div>
           <p class="muted">
             If you use this tool in a publication, please cite <b>{ORG_NAME}</b> and the
-            <b>{APP_NAME}</b>. Also cite MIXS and ENA where appropriate.
+            <b>{APP_NAME}</b>. Also cite CheckM, CheckM2, GTDB-Tk, and ENA where appropriate.
           </p>
           <p class="muted">
             <b>Making Microbiology Data FAIR and Open</b><br>
-            As a part of the Nationale Forschungsdaten Infrastruktur (NFDI),
+            As part of the Nationale Forschungsdaten Infrastruktur (NFDI),
             <b>NFDI4Microbiota</b> supports the microbiology community with access to data,
             analysis services, data/metadata standards, and training.
           </p>
@@ -373,11 +322,7 @@ def runUI():
             Helmholtz Centre for Environmental Research (UFZ), Leipzig.
           </p>
           <div class="h3">License</div>
-          <p class="muted">{LICENSE} — update if your project uses a different license.</p>
-          <div class="h3">Changelog</div>
-          <ul class="list">
-            <li>v0.1: Initial terrestrial metadata validation, CSV/Excel upload, clean export.</li>
-          </ul>
+          <p class="muted">{LICENSE}</p>
         </div>
         """,
         unsafe_allow_html=True,

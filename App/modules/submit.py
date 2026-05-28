@@ -5,25 +5,148 @@ import re
 import xml.etree.ElementTree as ET
 import gzip
 import tempfile
+import zipfile
 from pathlib import Path
-import os
-import shutil
 import subprocess
 import requests
 import time
+import json
 from datetime import datetime
+from urllib.parse import quote
+from rq import get_current_job
+from utils.tasks import enqueue_task, manager
+from utils.db import TaskResultManager, TaskStatus
 
 # =========================================================
 # CONFIG
 # =========================================================
 
-CHECKLIST_XML = "../checklists/ERC000047.xml"
-WEBIN_JAR = "../App/webin-cli-9.0.1.jar"
-BATCH_SIZE = 1000
+_HERE = Path(__file__).parent
+_APP_DIR = _HERE.parent
+_PROJECT_DIR = _APP_DIR.parent
+
+CHECKLIST_XML = str(_PROJECT_DIR / "checklists" / "ERC000047.xml")
+WEBIN_JAR = str(_APP_DIR / "webin-cli-9.0.1.jar")
+SUBMISSIONS_DIR = _APP_DIR / "jobs"
+EXAMPLES_DIR = _PROJECT_DIR / "examples"
+
+# =========================================================
+# METADATA HELPERS
+# =========================================================
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _ena_taxonomy_search(query: str) -> list[dict]:
+    if len(query.strip()) < 3:
+        return []
+    try:
+        r = requests.get(
+            f"https://www.ebi.ac.uk/ena/taxonomy/rest/suggest-for-search/{quote(query.strip())}",
+            timeout=6,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _envo_search(query: str) -> list[dict]:
+    if len(query.strip()) < 3:
+        return []
+    try:
+        r = requests.get(
+            "https://www.ebi.ac.uk/ols4/api/search",
+            params={"q": query.strip(), "ontology": "envo", "rows": 8},
+            timeout=6,
+        )
+        r.raise_for_status()
+        docs = r.json().get("response", {}).get("docs", [])
+        return [
+            {
+                "label": d.get("label", ""),
+                "obo_id": d.get("obo_id", ""),
+                "description": (d.get("description") or [""])[0][:120],
+            }
+            for d in docs
+            if d.get("label") and d.get("obo_id")
+        ]
+    except Exception:
+        return []
+
+
+def _parse_checkm_file(file) -> pd.DataFrame | None:
+    """Parse CheckM or CheckM2 output TSV into sample_name + quality columns."""
+    try:
+        df = pd.read_csv(file, sep="\t")
+        cols = df.columns.tolist()
+        if "Name" in cols and "Completeness" in cols and "Contamination" in cols:
+            name_col, software = "Name", "CheckM2"
+        elif "Bin Id" in cols and "Completeness" in cols and "Contamination" in cols:
+            name_col, software = "Bin Id", "CheckM"
+        else:
+            return None
+        return pd.DataFrame({
+            "sample_name": df[name_col].astype(str),
+            "completeness score": df["Completeness"].round(2).astype(str),
+            "contamination score": df["Contamination"].round(2).astype(str),
+            "completeness software": software,
+        })
+    except Exception:
+        return None
+
+
+def _parse_gtdbtk_file(file) -> pd.DataFrame | None:
+    """Parse GTDB-Tk summary TSV into sample_name + organism columns."""
+    try:
+        df = pd.read_csv(file, sep="\t")
+        if "user_genome" not in df.columns or "classification" not in df.columns:
+            return None
+
+        def _gtdb_to_name(classification: str) -> str:
+            parts = {}
+            for p in classification.split(";"):
+                if "__" in p:
+                    rank, name = p.split("__", 1)
+                    parts[rank.strip()] = name.strip().replace("_", " ")
+            for rank in ("s", "g", "f", "o", "c", "p"):
+                name = parts.get(rank, "")
+                if name:
+                    return name if rank == "s" else f"uncultured {name} bacterium"
+            return "uncultured bacterium"
+
+        return pd.DataFrame({
+            "sample_name": df["user_genome"].astype(str),
+            "organism": df["classification"].apply(_gtdb_to_name),
+        })
+    except Exception:
+        return None
+
+
+def _merge_into_metadata(base: pd.DataFrame, overlay: pd.DataFrame) -> pd.DataFrame:
+    """Merge overlay columns into base, keyed on sample_name. Only fills empty cells."""
+    result = base.copy()
+    for col in overlay.columns:
+        if col == "sample_name" or col not in result.columns:
+            continue
+        for _, orow in overlay.iterrows():
+            mask = result["sample_name"] == orow["sample_name"]
+            if not mask.any():
+                continue
+            idx = result.index[mask][0]
+            current = result.at[idx, col]
+            if pd.isna(current) or str(current).strip() in ("", "<NA>", "None", "nan"):
+                result.at[idx, col] = str(orow[col])
+    return result
+
 
 # =========================================================
 # XML CHECKLIST
 # =========================================================
+
+def _field(label, description, mandatory, ftype, *, regex=None, enum=None):
+    return {"label": label, "description": description, "type": ftype,
+            "regex": regex, "enum": enum, "mandatory": mandatory}
+
 
 def load_fields_from_xml(xml_path: str) -> dict:
 
@@ -31,94 +154,34 @@ def load_fields_from_xml(xml_path: str) -> dict:
     root = tree.getroot()
 
     fields = {
-        "sample_name": {
-            "label": "sample_name",
-            "description": "Sample name (must match fasta filename)",
-            "type": "free",
-            "regex": None,
-            "enum": None,
-            "mandatory": True,
-        },
-        "organism": {
-            "label": "organism",
-            "description": "Scientific organism name",
-            "type": "free",
-            "regex": None,
-            "enum": None,
-            "mandatory": True,
-        },
-        "tax_id": {
-            "label": "tax_id",
-            "description": "NCBI taxonomy ID",
-            "type": "free",
-            "regex": None,
-            "enum": None,
-            "mandatory": True,
-        },
+        "sample_name": _field("sample_name", "Sample name (must match fasta filename)", True, "free"),
+        "organism":    _field("organism",    "Scientific organism name",                True, "free"),
+        "tax_id":      _field("tax_id",      "NCBI taxonomy ID",                        True, "free"),
     }
 
     for field in root.findall(".//FIELD"):
 
         label = field.findtext("LABEL")
         description = field.findtext("DESCRIPTION")
-
         mandatory = field.findtext("MANDATORY") == "mandatory"
 
         regex_elem = field.findtext(".//REGEX_VALUE")
         enum_elems = field.findall(".//TEXT_CHOICE_FIELD/TEXT_VALUE/VALUE")
 
         if regex_elem:
-
-            fields[label] = {
-                "label": label,
-                "description": description,
-                "type": "regex",
-                "regex": re.compile(regex_elem),
-                "enum": None,
-                "mandatory": mandatory,
-            }
-
+            fields[label] = _field(label, description, mandatory, "regex",
+                                   regex=re.compile(regex_elem))
         elif enum_elems:
-
-            fields[label] = {
-                "label": label,
-                "description": description,
-                "type": "enum",
-                "regex": None,
-                "enum": [e.text for e in enum_elems],
-                "mandatory": mandatory,
-            }
-
+            fields[label] = _field(label, description, mandatory, "enum",
+                                   enum=[e.text for e in enum_elems])
         else:
+            fields[label] = _field(label, description, mandatory, "free")
 
-            fields[label] = {
-                "label": label,
-                "description": description,
-                "type": "free",
-                "regex": None,
-                "enum": None,
-                "mandatory": mandatory,
-            }
-
-    fields["genome coverage"] = {
-        "label": "genome coverage",
-        "description": "Estimated sequencing depth",
-        "type": "regex",
-        "regex": re.compile(
-            r"^(?:0?\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$"
-        ),
-        "enum": None,
-        "mandatory": True,
-    }
-
-    fields["platform"] = {
-        "label": "platform",
-        "description": "Sequencing platform",
-        "type": "free",
-        "regex": None,
-        "enum": None,
-        "mandatory": True,
-    }
+    fields["genome coverage"] = _field(
+        "genome coverage", "Estimated sequencing depth", True, "regex",
+        regex=re.compile(r"^(?:0?\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$"),
+    )
+    fields["platform"] = _field("platform", "Sequencing platform", True, "free")
 
     return fields
 
@@ -146,7 +209,7 @@ def validate_dataframe(df: pd.DataFrame, field_defs: dict) -> pd.DataFrame:
                     "row": idx + 1,
                     "field": col,
                     "value": "",
-                    "expected": "Mandatory field"
+                    "expected": "Mandatory field — cannot be empty"
                 })
                 continue
 
@@ -160,7 +223,7 @@ def validate_dataframe(df: pd.DataFrame, field_defs: dict) -> pd.DataFrame:
                         "row": idx + 1,
                         "field": col,
                         "value": value_str,
-                        "expected": field["regex"].pattern
+                        "expected": f"Pattern: {field['regex'].pattern}"
                     })
 
             elif field["type"] == "enum":
@@ -196,7 +259,6 @@ def build_column_config(field_defs: dict):
             column_config[name] = st.column_config.SelectboxColumn(
                 label=label,
                 options=field["enum"],
-                required=field["mandatory"],
                 help=field["description"]
             )
 
@@ -204,7 +266,6 @@ def build_column_config(field_defs: dict):
 
             column_config[name] = st.column_config.TextColumn(
                 label=label,
-                required=field["mandatory"],
                 help=field["description"]
             )
 
@@ -225,18 +286,9 @@ def load_tsv_into_schema(tsv_file, field_defs):
 
     schema_cols = list(field_defs.keys())
 
-    df = pd.read_csv(
-        tsv_file,
-        sep="\t",
-        dtype="string"
-    )
+    df = pd.read_csv(tsv_file, sep="\t", dtype="string")
 
-    df = df.reindex(columns=schema_cols)
-
-    for col in df.columns:
-        df[col] = df[col].astype("string")
-
-    return df
+    return df.reindex(columns=schema_cols).astype("string")
 
 # =========================================================
 # FASTA
@@ -270,24 +322,25 @@ def persist_fastas_temp(uploaded_files):
     return fasta_map
 
 # =========================================================
-# LOGGING
+# SUBMISSION WORKER (runs in RQ worker process)
 # =========================================================
 
-def create_log_dir():
+def submission_task(df_records, submission, fasta_map_str, email=None):
+    """
+    RQ worker function. All arguments must be JSON-serializable.
+    df_records: list of dicts from pl.DataFrame.to_dicts()
+    fasta_map_str: {sample_name: absolute_path_str}
+    """
+    job = get_current_job()
+    job_id = job.id if job else datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    manager.store_start(job_id, TaskStatus.RUNNING)
 
-    log_dir = Path(f"logs_{timestamp}")
+    log_dir = SUBMISSIONS_DIR / job_id
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-    log_dir.mkdir(exist_ok=True)
-
-    return log_dir
-
-# =========================================================
-# SUBMISSION
-# =========================================================
-
-def build_and_submit(df, submission, fasta_map):
+    df = pl.DataFrame(df_records)
+    fasta_map = {k: Path(v) for k, v in fasta_map_str.items()}
 
     samples_submitted = 0
     samples_error = 0
@@ -299,390 +352,407 @@ def build_and_submit(df, submission, fasta_map):
         "ENA-CHECKLIST",
     }
 
-    log_dir = create_log_dir()
-
     df = df.with_columns(
         pl.lit("ERC000047").alias("ENA-CHECKLIST")
     )
 
     project_accession = submission["study_accession"]
 
-    progress = st.progress(0)
+    root = ET.Element("WEBIN")
 
-    status_box = st.empty()
+    submission_set = ET.fromstring("""
+    <SUBMISSION_SET>
+        <SUBMISSION>
+            <ACTIONS>
+                <ACTION>
+                    <ADD/>
+                </ACTION>
+            </ACTIONS>
+        </SUBMISSION>
+    </SUBMISSION_SET>
+    """)
 
-    for offset in range(0, len(df), BATCH_SIZE):
+    root.append(submission_set)
 
-        status_box.info(
-            f"Processing batch {offset // BATCH_SIZE + 1}"
-        )
+    if not project_accession:
 
-        root = ET.Element("WEBIN")
-
-        submission_set = ET.fromstring("""
-        <SUBMISSION_SET>
-            <SUBMISSION>
-                <ACTIONS>
-                    <ACTION>
-                        <ADD/>
-                    </ACTION>
-                </ACTIONS>
-            </SUBMISSION>
-        </SUBMISSION_SET>
+        project_set = ET.fromstring(f"""
+        <PROJECT_SET>
+            <PROJECT alias="{submission["study_name"]}">
+            <TITLE>{submission["study_title"]}</TITLE>
+            <DESCRIPTION>{submission["study_description"]}</DESCRIPTION>
+            <SUBMISSION_PROJECT>
+                <SEQUENCING_PROJECT/>
+            </SUBMISSION_PROJECT>
+            </PROJECT>
+        </PROJECT_SET>
         """)
 
-        root.append(submission_set)
+        root.append(project_set)
 
-        if not project_accession:
+    sample_set = ET.SubElement(root, "SAMPLE_SET")
 
-            project_set = ET.fromstring(f"""
-            <PROJECT_SET>
-                <PROJECT alias="{submission["study_name"]}">
-                <TITLE>{submission["study_title"]}</TITLE>
-                <DESCRIPTION>{submission["study_description"]}</DESCRIPTION>
-                <SUBMISSION_PROJECT>
-                    <SEQUENCING_PROJECT/>
-                </SUBMISSION_PROJECT>
-                </PROJECT>
-            </PROJECT_SET>
-            """)
+    for row in df.iter_rows(named=True):
 
-            root.append(project_set)
+        sample = ET.SubElement(sample_set, "SAMPLE", {
+            "alias": str(row["sample_name"]),
+            "center_name": ""
+        })
 
-        sample_set = ET.SubElement(root, "SAMPLE_SET")
-
-        for row in df.slice(offset, BATCH_SIZE).iter_rows(named=True):
-
-            sample = ET.SubElement(sample_set, "SAMPLE", {
-                "alias": str(row["sample_name"]),
-                "center_name": ""
-            })
-
-            ET.SubElement(sample, "TITLE").text = (
-                "This sample represents a MAG derived from the metagenomic sample "
-                + str(row["sample derived from"])
-            )
-
-            sname = ET.SubElement(sample, "SAMPLE_NAME")
-
-            ET.SubElement(sname, "TAXON_ID").text = str(row["tax_id"])
-            ET.SubElement(sname, "SCIENTIFIC_NAME").text = str(row["organism"])
-
-            attrs = ET.SubElement(sample, "SAMPLE_ATTRIBUTES")
-
-            def add_attr(tag, value, units=None):
-
-                sa = ET.SubElement(attrs, "SAMPLE_ATTRIBUTE")
-
-                ET.SubElement(sa, "TAG").text = tag
-                ET.SubElement(sa, "VALUE").text = str(value)
-
-                if units:
-                    ET.SubElement(sa, "UNITS").text = units
-
-            explicit_cols = {
-                "metagenomic source",
-                "sample derived from",
-                "project name",
-                "completeness score",
-                "completeness software",
-                "contamination score",
-                "binning software",
-                "assembly quality",
-                "binning parameters",
-                "taxonomic identity marker",
-                "isolation_source",
-                "collection date",
-                "geographic location (latitude)",
-                "geographic location (longitude)",
-                "broad-scale environmental context",
-                "local environmental context",
-                "environmental medium",
-                "geographic location (country and/or sea)",
-                "assembly software",
-                "platform",
-                "genome coverage",
-            }
-
-            add_attr("metagenomic source", row["metagenomic source"])
-            add_attr("sample derived from", row["sample derived from"])
-            add_attr("project name", row["project name"])
-            add_attr("completeness score", row["completeness score"], "%")
-            add_attr("completeness software", row["completeness software"])
-            add_attr("contamination score", row["contamination score"], "%")
-            add_attr("binning software", row["binning software"])
-            add_attr("assembly quality", row["assembly quality"])
-            add_attr("binning parameters", row["binning parameters"])
-            add_attr("taxonomic identity marker", row["taxonomic identity marker"])
-            add_attr("isolation_source", row["isolation_source"])
-            add_attr("collection date", row["collection date"])
-
-            add_attr(
-                "geographic location (latitude)",
-                row["geographic location (latitude)"],
-                "DD"
-            )
-
-            add_attr(
-                "geographic location (longitude)",
-                row["geographic location (longitude)"],
-                "DD"
-            )
-
-            add_attr(
-                "broad-scale environmental context",
-                row["broad-scale environmental context"]
-            )
-
-            add_attr(
-                "local environmental context",
-                row["local environmental context"]
-            )
-
-            add_attr(
-                "environmental medium",
-                row["environmental medium"]
-            )
-
-            add_attr(
-                "geographic location (country and/or sea)",
-                row["geographic location (country and/or sea)"]
-            )
-
-            add_attr(
-                "assembly software",
-                row["assembly software"]
-            )
-
-            for col, value in row.items():
-
-                if col in RESERVED_COLUMNS:
-                    continue
-
-                if col in explicit_cols:
-                    continue
-
-                if value is None or str(value).strip() == "":
-                    continue
-
-                add_attr(col, value)
-
-            add_attr("ENA-CHECKLIST", row["ENA-CHECKLIST"])
-
-        xml_bytes = ET.tostring(
-            root,
-            encoding="UTF-8",
-            xml_declaration=True
+        ET.SubElement(sample, "TITLE").text = (
+            "This sample represents a MAG derived from the metagenomic sample "
+            + str(row["sample derived from"])
         )
 
-        if submission["portal"] == "Testing":
-            url = "https://wwwdev.ebi.ac.uk/ena/submit/webin-v2/submit/queue"
-        else:
-            url = "https://www.ebi.ac.uk/ena/submit/webin-v2/submit/queue"
+        sname = ET.SubElement(sample, "SAMPLE_NAME")
 
-        auth = (
-            submission["ena_user"],
-            submission["ena_password"]
-        )
+        ET.SubElement(sname, "TAXON_ID").text = str(row["tax_id"])
+        ET.SubElement(sname, "SCIENTIFIC_NAME").text = str(row["organism"])
 
-        headers = {
-            "Accept": "application/json"
+        attrs = ET.SubElement(sample, "SAMPLE_ATTRIBUTES")
+
+        def add_attr(tag, value, units=None):
+
+            sa = ET.SubElement(attrs, "SAMPLE_ATTRIBUTE")
+
+            ET.SubElement(sa, "TAG").text = tag
+            ET.SubElement(sa, "VALUE").text = str(value)
+
+            if units:
+                ET.SubElement(sa, "UNITS").text = units
+
+        explicit_cols = {
+            "metagenomic source",
+            "sample derived from",
+            "project name",
+            "completeness score",
+            "completeness software",
+            "contamination score",
+            "binning software",
+            "assembly quality",
+            "binning parameters",
+            "taxonomic identity marker",
+            "isolation_source",
+            "collection date",
+            "geographic location (latitude)",
+            "geographic location (longitude)",
+            "broad-scale environmental context",
+            "local environmental context",
+            "environmental medium",
+            "geographic location (country and/or sea)",
+            "assembly software",
+            "platform",
+            "genome coverage",
         }
 
-        files = {
-            "file": ("submit.xml", xml_bytes, "text/xml")
-        }
+        add_attr("metagenomic source", row["metagenomic source"])
+        add_attr("sample derived from", row["sample derived from"])
+        add_attr("project name", row["project name"])
+        add_attr("completeness score", row["completeness score"], "%")
+        add_attr("completeness software", row["completeness software"])
+        add_attr("contamination score", row["contamination score"], "%")
+        add_attr("binning software", row["binning software"])
+        add_attr("assembly quality", row["assembly quality"])
+        add_attr("binning parameters", row["binning parameters"])
+        add_attr("taxonomic identity marker", row["taxonomic identity marker"])
+        add_attr("isolation_source", row["isolation_source"])
+        add_attr("collection date", row["collection date"])
 
-        response = requests.post(
-            url,
-            headers=headers,
-            files=files,
-            auth=auth
+        add_attr(
+            "geographic location (latitude)",
+            row["geographic location (latitude)"],
+            "DD"
         )
 
-        response.raise_for_status()
+        add_attr(
+            "geographic location (longitude)",
+            row["geographic location (longitude)"],
+            "DD"
+        )
 
-        response_json = response.json()
+        add_attr(
+            "broad-scale environmental context",
+            row["broad-scale environmental context"]
+        )
 
-        poll_url = response_json["_links"]["poll"]["href"]
+        add_attr(
+            "local environmental context",
+            row["local environmental context"]
+        )
 
+        add_attr(
+            "environmental medium",
+            row["environmental medium"]
+        )
+
+        add_attr(
+            "geographic location (country and/or sea)",
+            row["geographic location (country and/or sea)"]
+        )
+
+        add_attr(
+            "assembly software",
+            row["assembly software"]
+        )
+
+        for col, value in row.items():
+
+            if col in RESERVED_COLUMNS:
+                continue
+
+            if col in explicit_cols:
+                continue
+
+            if value is None or str(value).strip() == "":
+                continue
+
+            add_attr(col, value)
+
+        add_attr("ENA-CHECKLIST", row["ENA-CHECKLIST"])
+
+    xml_bytes = ET.tostring(
+        root,
+        encoding="UTF-8",
+        xml_declaration=True
+    )
+
+    with open(log_dir / "submit.xml", "wb") as f:
+        f.write(xml_bytes)
+
+    if submission["portal"] == "Testing":
+        url = "https://wwwdev.ebi.ac.uk/ena/submit/webin-v2/submit/queue"
+    else:
+        url = "https://www.ebi.ac.uk/ena/submit/webin-v2/submit/queue"
+
+    auth = (
+        submission["ena_user"],
+        submission["ena_password"]
+    )
+
+    headers = {
+        "Accept": "application/json"
+    }
+
+    files = {
+        "file": ("submit.xml", xml_bytes, "text/xml")
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        files=files,
+        auth=auth
+    )
+
+    response.raise_for_status()
+
+    response_json = response.json()
+
+    poll_url = response_json["_links"]["poll"]["href"]
+
+    response = requests.get(poll_url, auth=auth)
+
+    while response.status_code != 200:
+        time.sleep(5)
         response = requests.get(poll_url, auth=auth)
 
-        while response.status_code != 200:
-            time.sleep(5)
-            response = requests.get(poll_url, auth=auth)
+    xml_text = response.text
 
-        xml_text = response.text
+    xml_log = log_dir / "webin_log.xml"
 
-        xml_log = log_dir / f"log_{offset}.xml"
+    with open(xml_log, "w", encoding="utf-8") as f:
+        f.write(xml_text)
 
-        with open(xml_log, "w", encoding="utf-8") as f:
-            f.write(xml_text)
+    root = ET.fromstring(xml_text)
 
-        root = ET.fromstring(xml_text)
+    alias_to_accession = {}
 
-        alias_to_accession = {}
+    for sample in root.findall(".//SAMPLE"):
 
-        for sample in root.findall(".//SAMPLE"):
+        accession = sample.get("accession")
 
-            accession = sample.get("accession")
+        if accession:
+            alias_to_accession[
+                sample.get("alias")
+            ] = accession
 
-            if accession:
-                alias_to_accession[
-                    sample.get("alias")
-                ] = accession
+    error_regex = re.compile(
+        r'alias: "(.+?)".*accession: "(.+?)"'
+    )
 
-        error_regex = re.compile(
-            r'alias: "(.+?)".*accession: "(.+?)"'
-        )
+    for err in root.findall(".//ERROR"):
 
-        for err in root.findall(".//ERROR"):
+        error_msg = err.text
 
-            error_msg = err.text
+        match = error_regex.search(error_msg)
 
-            match = error_regex.search(error_msg)
+        if match:
 
-            if match:
+            alias, accession = match.groups()
 
-                alias, accession = match.groups()
+            alias_to_accession[alias] = accession
 
-                alias_to_accession[alias] = accession
+    if not project_accession:
 
-        if not project_accession:
+        for project in root.findall(".//PROJECT"):
+            project_accession = project.get("accession")
 
-            for project in root.findall(".//PROJECT"):
-                project_accession = project.get("accession")
+    manifests = {}
 
-        for alias, sample_accession in alias_to_accession.items():
+    for alias, sample_accession in alias_to_accession.items():
 
-            fasta_path = fasta_map[alias]
+        fasta_path = fasta_map[alias]
 
-            seq_count = 0
-            last_header = None
+        seq_count = 0
+        last_header = None
 
-            with gzip.open(fasta_path, "rt") as f:
+        with gzip.open(fasta_path, "rt") as f:
 
-                for line in f:
+            for line in f:
 
-                    if line.startswith(">"):
+                if line.startswith(">"):
 
-                        seq_count += 1
-                        last_header = line[1:].strip()
+                    seq_count += 1
+                    last_header = line[1:].strip()
 
-                        if seq_count > 1:
-                            break
+                    if seq_count > 1:
+                        break
 
-            base_manifest = f"""STUDY   {project_accession}
+        sample_row = df.filter(pl.col("sample_name") == alias)
+
+        base_manifest = f"""STUDY   {project_accession}
 SAMPLE   {sample_accession}
 ASSEMBLYNAME   {alias}
 ASSEMBLY_TYPE   Metagenome-Assembled Genome (MAG)
-COVERAGE   {df.filter(pl.col("sample_name") == alias)["genome coverage"].item()}
-PROGRAM   {df.filter(pl.col("sample_name") == alias)["assembly software"].item()}
-PLATFORM   {df.filter(pl.col("sample_name") == alias)["platform"].item()}
+COVERAGE   {sample_row["genome coverage"].item()}
+PROGRAM   {sample_row["assembly software"].item()}
+PLATFORM   {sample_row["platform"].item()}
 FASTA   {fasta_path}"""
 
-            chromosome_gz_path = None
+        chromosome_gz_path = None
 
-            if seq_count == 1:
+        if seq_count == 1:
 
-                chromosome_list = (
-                    f"{last_header}\t{alias}\tchromosome"
-                )
-
-                with tempfile.NamedTemporaryFile(
-                    mode="wb+",
-                    suffix=".gz",
-                    delete=False
-                ) as tmp_chromosome_gz:
-
-                    with gzip.GzipFile(
-                        fileobj=tmp_chromosome_gz,
-                        mode="wb"
-                    ) as gz_file:
-
-                        gz_file.write(
-                            chromosome_list.encode("utf-8")
-                        )
-
-                    chromosome_gz_path = tmp_chromosome_gz.name
-
-                base_manifest += (
-                    f"\nCHROMOSOME_LIST   {chromosome_gz_path}"
-                )
+            chromosome_list = (
+                f"{last_header}\t{alias}\tchromosome"
+            )
 
             with tempfile.NamedTemporaryFile(
-                mode="w+",
+                mode="wb+",
+                suffix=".gz",
                 delete=False
-            ) as tmp_manifest:
+            ) as tmp_chromosome_gz:
 
-                tmp_manifest.write(base_manifest)
+                with gzip.GzipFile(
+                    fileobj=tmp_chromosome_gz,
+                    mode="wb"
+                ) as gz_file:
 
-                manifest_path = tmp_manifest.name
-
-            try:
-
-                cmd = [
-                    "java",
-                    "-jar",
-                    WEBIN_JAR,
-                    "-username",
-                    auth[0],
-                    "-password",
-                    auth[1],
-                    "-context",
-                    "genome",
-                    "-manifest",
-                    manifest_path,
-                    "-submit",
-                ]
-
-                if submission["portal"] == "Testing":
-                    cmd.append("-test")
-
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True
-                )
-
-                success = (
-                    "successfully" in result.stdout.lower()
-                )
-
-                logfile = (
-                    log_dir / "success.txt"
-                    if success
-                    else log_dir / "error.txt"
-                )
-
-                with open(logfile, "a") as f:
-                    f.write(
-                        f"SAMPLE : {alias}\n"
-                        f"{result.stdout}\n"
+                    gz_file.write(
+                        chromosome_list.encode("utf-8")
                     )
 
-                if success:
-                    samples_submitted += 1
-                else:
-                    samples_error += 1
+                chromosome_gz_path = tmp_chromosome_gz.name
 
-            finally:
+            base_manifest += (
+                f"\nCHROMOSOME_LIST   {chromosome_gz_path}"
+            )
 
-                os.remove(manifest_path)
+        manifests[alias] = base_manifest
 
-                if chromosome_gz_path:
-                    if os.path.exists(chromosome_gz_path):
-                        os.remove(chromosome_gz_path)
+        with tempfile.NamedTemporaryFile(
+            mode="w+",
+            delete=False
+        ) as tmp_manifest:
 
-        progress.progress(
-            min((offset + BATCH_SIZE) / len(df), 1.0)
-        )
+            tmp_manifest.write(base_manifest)
 
-    return {
+            manifest_path = tmp_manifest.name
+
+        try:
+
+            cmd = [
+                "java",
+                "-jar",
+                WEBIN_JAR,
+                "-username",
+                auth[0],
+                "-password",
+                auth[1],
+                "-context",
+                "genome",
+                "-manifest",
+                manifest_path,
+                "-submit",
+            ]
+
+            if submission["portal"] == "Testing":
+                cmd.append("-test")
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True
+            )
+
+            success = (
+                "successfully" in result.stdout.lower()
+            )
+
+            logfile = (
+                log_dir / "success.txt"
+                if success
+                else log_dir / "error.txt"
+            )
+
+            with open(logfile, "a") as f:
+                f.write(
+                    f"SAMPLE : {alias}\n"
+                    f"{result.stdout}\n"
+                )
+
+            if success:
+                samples_submitted += 1
+            else:
+                samples_error += 1
+
+        finally:
+
+            Path(manifest_path).unlink(missing_ok=True)
+
+            if chromosome_gz_path:
+                Path(chromosome_gz_path).unlink(missing_ok=True)
+
+    with zipfile.ZipFile(log_dir / "manifests.zip", "w", zipfile.ZIP_DEFLATED) as zf:
+        for alias, content in manifests.items():
+            zf.writestr(f"{alias}.manifest", content)
+
+    # Clean up temp FASTA files
+    for path in fasta_map.values():
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    task_result = {
         "submitted": samples_submitted,
         "errors": samples_error,
-        "log_dir": log_dir
+        "log_dir": str(log_dir),
     }
+
+    with open(log_dir / "result.json", "w") as f:
+        json.dump(task_result, f)
+
+    return task_result
+
+@st.dialog("Job submitted")
+def job_submitted_dialog(job_id):
+    st.success(
+        f'Job submitted to the queue.\n\n'
+        f'You can consult the results in **Jobs** using the following ID:\n\n'
+        f'**{job_id}**\n\n'
+        f'Save this ID securely.'
+    )
 
 # =========================================================
 # UI
@@ -690,69 +760,396 @@ FASTA   {fasta_path}"""
 
 def runUI():
 
-    if not os.path.exists(WEBIN_JAR):
+    if not Path(WEBIN_JAR).exists():
         st.error(f"Missing Webin CLI jar: {WEBIN_JAR}")
         st.stop()
 
     field_defs = load_fields_from_xml(CHECKLIST_XML)
 
     if "metadata_df" not in st.session_state:
-        st.session_state.metadata_df = (
-            initialize_empty_dataframe(field_defs)
-        )
+        st.session_state.metadata_df = initialize_empty_dataframe(field_defs)
 
-    uploaded_tsv = st.file_uploader(
-        "Upload metadata TSV (optional)",
-        type=["tsv"]
+    if "editor_key" not in st.session_state:
+        st.session_state.editor_key = 0
+
+    st.info(
+        "This page walks you through submitting Metagenome-Assembled Genomes (MAGs) to ENA. "
+        "Fill in your metadata, upload one `.fasta.gz` file per MAG, enter your ENA Webin "
+        "credentials, and submit — all XML and Webin-CLI manifests are generated automatically. "
+        "**Limit: 1,000 MAGs per job.** For larger collections, split your metadata into batches "
+        "of up to 1,000 rows and submit each batch separately.",
+        icon="ℹ️",
     )
 
-    if uploaded_tsv:
+    # ── Step 1: Metadata ──────────────────────────────────────────────────────
+    st.subheader("Step 1 — Metadata")
 
-        st.session_state.metadata_df = (
-            load_tsv_into_schema(
-                uploaded_tsv,
-                field_defs
-            )
+    col_upload, col_template = st.columns([3, 1])
+
+    with col_upload:
+        uploaded_tsv = st.file_uploader(
+            "Upload metadata TSV (optional)",
+            type=["tsv"],
+            help="Upload an existing TSV to pre-fill the table. You can continue editing it below."
         )
 
-    st.subheader("Metadata table")
+    with col_template:
+        template_df = initialize_empty_dataframe(field_defs)
+        tsv_bytes = template_df.to_csv(sep="\t", index=False).encode()
+        st.download_button(
+            "Download template",
+            data=tsv_bytes,
+            file_name="metadata_template.tsv",
+            mime="text/tab-separated-values",
+            use_container_width=True,
+            help="Download an empty TSV template with the required columns."
+        )
+
+    # Only reload from TSV when a new file is uploaded (different filename),
+    # so that subsequent user edits to the table are not overwritten on re-render.
+    if uploaded_tsv:
+        if st.session_state.get("tsv_filename") != uploaded_tsv.name:
+            st.session_state.metadata_df = load_tsv_into_schema(uploaded_tsv, field_defs)
+            st.session_state.tsv_filename = uploaded_tsv.name
+            st.session_state.pop("validated_df", None)
+            st.session_state.editor_key += 1
+
+    row_count = len(st.session_state.metadata_df)
+    st.caption(
+        f"{row_count} row{'s' if row_count != 1 else ''} · "
+        "Columns marked with * are mandatory · "
+        "Hover column headers for field descriptions"
+    )
 
     edited_df = st.data_editor(
         st.session_state.metadata_df,
         num_rows="dynamic",
         column_config=build_column_config(field_defs),
         hide_index=True,
-        width="stretch"
+        use_container_width=True,
+        key=f"metadata_editor_{st.session_state.editor_key}",
     )
 
-    if st.button("Validate metadata"):
+    # Persist edits back to session state so re-renders don't discard them.
+    st.session_state.metadata_df = edited_df
 
-        if edited_df.empty:
+    # ── Step 1b: Metadata assistance ─────────────────────────────────────────
+    with st.expander("Metadata assistance"):
 
+        tab_tax, tab_envo, tab_fill, tab_import = st.tabs([
+            "Taxonomy resolver",
+            "ENVO term search",
+            "Fill column",
+            "Import quality files",
+        ])
+
+        # ── Taxonomy resolver ─────────────────────────────────────────────────
+        with tab_tax:
+            st.caption(
+                "Search the ENA taxonomy database by organism name to find the correct "
+                "scientific name and NCBI taxon ID."
+            )
+            tax_query = st.text_input(
+                "Organism name",
+                key="tax_query",
+                placeholder="e.g. uncultured Firmicutes bacterium",
+            )
+            col_search, col_batch = st.columns(2)
+
+            with col_search:
+                if st.button("Search taxonomy", key="btn_tax_search", use_container_width=True):
+                    if tax_query:
+                        with st.spinner("Querying ENA taxonomy…"):
+                            st.session_state.tax_results = _ena_taxonomy_search(tax_query)
+                    else:
+                        st.warning("Enter an organism name first.")
+
+            with col_batch:
+                if st.button(
+                    "Batch resolve tax IDs",
+                    key="btn_batch_tax",
+                    use_container_width=True,
+                    help=(
+                        "For every row with `organism` filled but `tax_id` empty, "
+                        "query the ENA taxonomy API and fill the best match."
+                    ),
+                ):
+                    df_mod = st.session_state.metadata_df.copy()
+                    resolved, unresolved = 0, []
+                    with st.spinner("Resolving tax IDs…"):
+                        for idx, row in df_mod.iterrows():
+                            org = str(row.get("organism", "")).strip()
+                            tid = str(row.get("tax_id", "")).strip()
+                            if org and tid in ("", "<NA>", "None", "nan"):
+                                hits = _ena_taxonomy_search(org)
+                                if hits:
+                                    exact = next(
+                                        (
+                                            h for h in hits
+                                            if h.get("scientificName", "").lower() == org.lower()
+                                        ),
+                                        hits[0],
+                                    )
+                                    df_mod.at[idx, "tax_id"] = str(exact["taxId"])
+                                    resolved += 1
+                                else:
+                                    unresolved.append(org)
+                    st.session_state.metadata_df = df_mod
+                    st.session_state.pop("validated_df", None)
+                    st.session_state.editor_key += 1
+                    if resolved:
+                        st.toast(f"Resolved {resolved} tax ID(s).", icon="✅")
+                    if unresolved:
+                        st.warning(
+                            f"Could not resolve {len(unresolved)} organism(s): "
+                            + ", ".join(unresolved[:5])
+                            + ("…" if len(unresolved) > 5 else "")
+                        )
+                    st.rerun()
+
+            results = st.session_state.get("tax_results")
+            if results is not None:
+                if results:
+                    res_df = pd.DataFrame([
+                        {
+                            "tax_id": r.get("taxId", ""),
+                            "Scientific name": r.get("scientificName", ""),
+                            "Rank": r.get("rank", ""),
+                        }
+                        for r in results[:10]
+                    ])
+                    st.dataframe(res_df, hide_index=True, use_container_width=True)
+
+                    col_sel, col_fill = st.columns([3, 2])
+                    with col_sel:
+                        selected_idx = st.selectbox(
+                            "Apply result",
+                            options=range(len(results[:10])),
+                            format_func=lambda i: (
+                                f"{results[i].get('scientificName')} "
+                                f"(taxId: {results[i].get('taxId')})"
+                            ),
+                            key="tax_select",
+                        )
+                    with col_fill:
+                        st.write("")
+                        if st.button("Fill all rows", key="btn_tax_fill", use_container_width=True):
+                            chosen = results[selected_idx]
+                            df_mod = st.session_state.metadata_df.copy()
+                            df_mod["organism"] = str(chosen["scientificName"])
+                            df_mod["tax_id"] = str(chosen["taxId"])
+                            st.session_state.metadata_df = df_mod
+                            st.session_state.pop("validated_df", None)
+                            st.session_state.pop("tax_results", None)
+                            st.session_state.editor_key += 1
+                            st.toast("Filled organism and tax_id for all rows.", icon="✅")
+                            st.rerun()
+                else:
+                    st.info("No results found. Try a broader search term.")
+
+        # ── ENVO term search ──────────────────────────────────────────────────
+        with tab_envo:
+            st.caption(
+                "Search the ENVO ontology for terms to use in "
+                "`broad-scale environmental context`, `local environmental context`, "
+                "and `environmental medium` fields."
+            )
+            envo_query = st.text_input(
+                "Search term",
+                key="envo_query",
+                placeholder="e.g. soil, marine sediment, freshwater",
+            )
+            if st.button("Search ENVO", key="btn_envo_search"):
+                if envo_query:
+                    with st.spinner("Querying ENVO ontology…"):
+                        st.session_state.envo_results = _envo_search(envo_query)
+                else:
+                    st.warning("Enter a search term first.")
+
+            envo_results = st.session_state.get("envo_results")
+            if envo_results is not None:
+                if envo_results:
+                    for r in envo_results:
+                        col_id, col_label, col_desc = st.columns([2, 3, 4])
+                        with col_id:
+                            st.code(r["obo_id"])
+                        with col_label:
+                            st.write(r["label"])
+                        with col_desc:
+                            st.caption(r["description"])
+                    st.caption(
+                        "Copy the ENVO ID (e.g. `ENVO:00002030`) directly into the metadata table."
+                    )
+                else:
+                    st.info("No results found.")
+
+        # ── Fill column ───────────────────────────────────────────────────────
+        with tab_fill:
+            st.caption(
+                "Apply a single value across an entire column — useful for study-wide "
+                "constants such as `platform`, `assembly software`, or `collection date`."
+            )
+            fillable_cols = [c for c in st.session_state.metadata_df.columns if c != "sample_name"]
+            fill_col = st.selectbox("Column", options=fillable_cols, key="fill_col")
+            fill_empty_only = st.checkbox("Fill empty cells only", value=True, key="fill_empty_only")
+
+            field_def = field_defs.get(fill_col, {})
+            if field_def.get("type") == "enum":
+                fill_val = st.selectbox("Value", options=field_def["enum"], key="fill_val_enum")
+            else:
+                fill_val = st.text_input("Value", key="fill_val_text")
+
+            if st.button("Apply to column", key="btn_fill_apply", type="primary"):
+                df_mod = st.session_state.metadata_df.copy()
+                if fill_empty_only:
+                    mask = df_mod[fill_col].isna() | (
+                        df_mod[fill_col].astype(str).str.strip().isin(["", "<NA>", "None", "nan"])
+                    )
+                    df_mod.loc[mask, fill_col] = fill_val
+                else:
+                    df_mod[fill_col] = fill_val
+                st.session_state.metadata_df = df_mod
+                st.session_state.pop("validated_df", None)
+                st.session_state.editor_key += 1
+                st.toast(f"Applied value to `{fill_col}`.", icon="✅")
+                st.rerun()
+
+        # ── Import quality files ──────────────────────────────────────────────
+        with tab_import:
+            st.caption(
+                "Auto-populate metadata columns from bioinformatics tool outputs. "
+                "Only empty cells are overwritten — existing values are preserved."
+            )
+            col_checkm, col_gtdbtk = st.columns(2)
+
+            with col_checkm:
+                col_title, col_ex1, col_ex2 = st.columns([3, 2, 2])
+                with col_title:
+                    st.markdown("**CheckM / CheckM2**")
+                with col_ex1:
+                    checkm1_path = EXAMPLES_DIR / "checkm_example.tsv"
+                    if checkm1_path.exists():
+                        st.download_button(
+                            "CheckM example",
+                            data=checkm1_path.read_bytes(),
+                            file_name="checkm_example.tsv",
+                            mime="text/tab-separated-values",
+                            use_container_width=True,
+                            help="Download an example CheckM v1 output (storage.tsv format).",
+                        )
+                with col_ex2:
+                    checkm2_path = EXAMPLES_DIR / "checkm2_example.tsv"
+                    if checkm2_path.exists():
+                        st.download_button(
+                            "CheckM2 example",
+                            data=checkm2_path.read_bytes(),
+                            file_name="checkm2_example.tsv",
+                            mime="text/tab-separated-values",
+                            use_container_width=True,
+                            help="Download an example CheckM2 output (quality_report.tsv format).",
+                        )
+                st.caption("Fills: `completeness score`, `contamination score`, `completeness software`")
+                checkm_file = st.file_uploader(
+                    "quality_report.tsv or storage.tsv",
+                    type=["tsv", "txt"],
+                    key="checkm_upload",
+                )
+                if checkm_file:
+                    parsed_qc = _parse_checkm_file(checkm_file)
+                    if parsed_qc is None:
+                        st.error("Unrecognised format. Expected CheckM or CheckM2 output.")
+                    elif st.button("Apply CheckM data", key="btn_checkm"):
+                        df_mod = _merge_into_metadata(st.session_state.metadata_df, parsed_qc)
+                        matched = int(parsed_qc["sample_name"].isin(df_mod["sample_name"]).sum())
+                        st.session_state.metadata_df = df_mod
+                        st.session_state.pop("validated_df", None)
+                        st.session_state.editor_key += 1
+                        st.toast(f"Applied quality scores for {matched} sample(s).", icon="✅")
+                        st.rerun()
+
+            with col_gtdbtk:
+                col_title, col_ex = st.columns([3, 2])
+                with col_title:
+                    st.markdown("**GTDB-Tk**")
+                with col_ex:
+                    gtdbtk_path = EXAMPLES_DIR / "gtdbtk_example.tsv"
+                    if gtdbtk_path.exists():
+                        st.download_button(
+                            "GTDB-Tk example",
+                            data=gtdbtk_path.read_bytes(),
+                            file_name="gtdbtk_example.tsv",
+                            mime="text/tab-separated-values",
+                            use_container_width=True,
+                            help="Download an example GTDB-Tk summary TSV (bac120 format).",
+                        )
+                st.caption("Fills: `organism` — use *Taxonomy resolver* afterwards to auto-fill `tax_id`")
+                gtdbtk_file = st.file_uploader(
+                    "gtdbtk.bac120.summary.tsv or gtdbtk.ar53.summary.tsv",
+                    type=["tsv"],
+                    key="gtdbtk_upload",
+                )
+                if gtdbtk_file:
+                    parsed_gtdb = _parse_gtdbtk_file(gtdbtk_file)
+                    if parsed_gtdb is None:
+                        st.error("Unrecognised format. Expected GTDB-Tk summary TSV.")
+                    elif st.button("Apply GTDB-Tk data", key="btn_gtdbtk"):
+                        df_mod = _merge_into_metadata(st.session_state.metadata_df, parsed_gtdb)
+                        matched = int(parsed_gtdb["sample_name"].isin(df_mod["sample_name"]).sum())
+                        st.session_state.metadata_df = df_mod
+                        st.session_state.pop("validated_df", None)
+                        st.session_state.editor_key += 1
+                        st.toast(
+                            f"Applied organism names for {matched} sample(s). "
+                            "Run Taxonomy resolver to fill tax IDs.",
+                            icon="✅",
+                        )
+                        st.rerun()
+
+    col_validate, col_reset = st.columns([4, 1])
+
+    with col_reset:
+        if st.button("Reset table", use_container_width=True, help="Clear all rows and start over."):
+            st.session_state.metadata_df = initialize_empty_dataframe(field_defs)
+            st.session_state.pop("tsv_filename", None)
+            st.session_state.pop("validated_df", None)
+            st.session_state.editor_key += 1
+            st.rerun()
+
+    with col_validate:
+        validate_clicked = st.button(
+            "Validate metadata",
+            type="primary",
+            use_container_width=True,
+        )
+
+    if validate_clicked:
+
+        non_empty = edited_df.dropna(how="all")
+
+        if edited_df.empty or non_empty.empty:
             st.error("Metadata table cannot be empty.")
             st.stop()
 
-        error_df = validate_dataframe(
-            edited_df,
-            field_defs
-        )
+        if len(edited_df) > 1000:
+            st.error(
+                f"Submission is limited to 1000 rows. "
+                f"Your table has {len(edited_df)} rows."
+            )
+            st.stop()
+
+        error_df = validate_dataframe(edited_df, field_defs)
 
         if not error_df.empty:
-
-            st.error(
-                f"{len(error_df)} validation error(s)"
-            )
-
+            st.error(f"{len(error_df)} validation error(s) found:")
             st.dataframe(
                 error_df,
                 hide_index=True,
-                width="stretch"
+                use_container_width=True,
             )
-
             st.stop()
 
         st.success(
-            "Metadata validated successfully."
+            f"All {len(edited_df)} sample(s) validated successfully."
         )
 
         st.session_state.validated_df = edited_df
@@ -760,12 +1157,21 @@ def runUI():
     if "validated_df" not in st.session_state:
         return
 
-    st.subheader("FASTA files")
+    # ── Step 2: FASTA files ───────────────────────────────────────────────────
+    st.divider()
+
+    st.subheader("Step 2 — FASTA files")
+
+    n_samples = len(st.session_state.validated_df)
+    st.caption(
+        f"Upload one `.fasta.gz` file per sample. "
+        f"Expected {n_samples} file(s) — filenames must match the `sample_name` column."
+    )
 
     uploaded_fastas = st.file_uploader(
         "Upload FASTA.GZ files",
         type=["gz"],
-        accept_multiple_files=True
+        accept_multiple_files=True,
     )
 
     fasta_map = {}
@@ -773,45 +1179,45 @@ def runUI():
     if uploaded_fastas:
 
         try:
-
-            fasta_map = persist_fastas_temp(
-                uploaded_fastas
-            )
-
+            fasta_map = persist_fastas_temp(uploaded_fastas)
         except Exception as e:
-
             st.error(str(e))
             st.stop()
 
-        missing = (
-            set(st.session_state.validated_df["sample_name"])
-            - set(fasta_map)
+        expected = set(
+            st.session_state.validated_df["sample_name"].dropna()
         )
+        uploaded = set(fasta_map)
+        missing = expected - uploaded
+        extra = uploaded - expected
 
         if missing:
-
             st.error(
-                f"Missing FASTA files for: {', '.join(missing)}"
+                f"Missing FASTA files for: {', '.join(sorted(missing))}"
             )
-
             st.stop()
 
+        if extra:
+            st.warning(
+                f"Extra FASTA files not in the metadata (will be ignored): "
+                f"{', '.join(sorted(extra))}"
+            )
+
         st.success(
-            "All FASTA files uploaded successfully."
+            f"All {len(fasta_map)} FASTA file(s) uploaded and matched successfully."
         )
 
     if not fasta_map:
         return
 
-    st.subheader("ENA submission")
+    # ── Step 3: ENA submission ────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Step 3 — ENA submission")
 
     study_mode = st.radio(
         "Submission mode",
-        [
-            "Create new study",
-            "Existing study accession"
-        ],
-        horizontal=True
+        ["Create new study", "Existing study accession"],
+        horizontal=True,
     )
 
     notification_container = st.container()
@@ -821,45 +1227,44 @@ def runUI():
         if study_mode == "Create new study":
 
             study_name = st.text_input("Study name")
-
             study_title = st.text_input("Study title")
-
-            study_description = st.text_area(
-                "Study description"
-            )
-
+            study_description = st.text_area("Study description")
             study_accession = None
 
         else:
 
-            study_accession = st.text_input(
-                "Study accession"
-            )
-
+            study_accession = st.text_input("Study accession")
             study_name = None
             study_title = None
             study_description = None
 
-        ena_user = st.text_input(
-            "ENA Webin username"
-        )
+        col_user, col_pass = st.columns(2)
 
-        ena_password = st.text_input(
-            "ENA Webin password",
-            type="password"
-        )
+        with col_user:
+            ena_user = st.text_input("ENA Webin username")
+
+        with col_pass:
+            ena_password = st.text_input(
+                "ENA Webin password",
+                type="password"
+            )
 
         portal = st.radio(
             "Submission portal",
             ["Testing", "Production"],
             horizontal=True,
-            help="Use the Testing portal before the Production to validate your submission."
+            help="Use the Testing portal before Production to validate your submission."
+        )
+
+        notification_email = st.text_input(
+            "Notification email (optional)",
+            help="Enter your email to receive a notification when the submission completes."
         )
 
         submitted = st.form_submit_button(
-            "Submit",
+            "Submit to ENA",
             type="primary",
-            use_container_width=True
+            use_container_width=True,
         )
 
     if submitted:
@@ -868,17 +1273,17 @@ def runUI():
 
             if not study_name:
                 with notification_container:
-                    st.error("Study name required.")
+                    st.error("Study name is required.")
                 st.stop()
 
             if (
-                len(study_title) < 20
-                or len(study_description) < 20
+                len(study_title or "") < 20
+                or len(study_description or "") < 20
             ):
                 with notification_container:
                     st.error(
                         "Study title and description "
-                        "must be at least 20 characters."
+                        "must each be at least 20 characters."
                     )
                 st.stop()
 
@@ -899,48 +1304,26 @@ def runUI():
             "portal": portal,
         }
 
-        try:
-            with st.spinner("Submitting to ENA..."):
-                results = build_and_submit(
-                    pl.from_pandas(
-                        st.session_state.validated_df
-                    ),
-                    submission,
-                    fasta_map
-                )
+        fasta_map_str = {k: str(v) for k, v in fasta_map.items()}
 
-            st.success(
-                f"{results['submitted']} samples "
-                f"submitted successfully."
-            )
+        df_records = pl.from_pandas(
+            st.session_state.validated_df
+        ).to_dicts()
 
-            if results["errors"] > 0:
-                st.warning(
-                    f"{results['errors']} samples "
-                    f"had errors."
-                )
+        fn_kwargs = {
+            "df_records": df_records,
+            "submission": submission,
+            "fasta_map_str": fasta_map_str,
+        }
 
-            log_dir = results["log_dir"]
+        if notification_email:
+            fn_kwargs["email"] = notification_email
 
-            st.subheader("Logs")
+        job_id = enqueue_task(submission_task, fn_kwargs)
 
-            for logfile in sorted(log_dir.glob("*")):
-
-                with open(logfile, "rb") as f:
-
-                    st.download_button(
-                        label=f"Download {logfile.name}",
-                        data=f.read(),
-                        file_name=logfile.name,
-                        use_container_width=True
-                    )
-
-        finally:
-            for path in fasta_map.values():
-                try:
-                    path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+        with notification_container:
+            st.success("Submission queued successfully!")
+            job_submitted_dialog(job_id)
 
 # =========================================================
 # MAIN

@@ -4,12 +4,28 @@ import streamlit as st
 from streamlit_option_menu import option_menu
 import utils, modules
 import subprocess, os
+from utils.tasks import manager
 from datetime import datetime
 
 def clear_cache():
     keys = list(st.session_state.keys())
     for key in keys:
-        st.session_state.pop(key)
+        if key != "cookie":
+            st.session_state.pop(key)
+
+@st.dialog("ℹ️ Use notice", width="large")
+def cookie_dialog():
+    st.markdown(
+        """
+        This web server uses **session cookies solely** to ensure proper functionality.
+
+        No personal tracking or persistent cookies are employed.
+
+        This platform is released under the [MIT license](https://opensource.org/licenses/MIT). **Free for academic and commercial use**.
+        """
+    )
+
+    st.session_state["cookie"] = True
 
 def runUI():
     st.set_page_config(page_title = "NFDI ENA Submission Tool", page_icon = "imgs/icon.png", initial_sidebar_state = "expanded", layout="wide")
@@ -26,25 +42,23 @@ def runUI():
     )
 
     if page == "Home":
-        clear_cache()
         modules.home.runUI()
-        if "job_path" in st.session_state:
-            del st.session_state["job_path"]
+        clear_cache()
 
     elif page == "Submit":
         modules.submit.runUI()
-        if "job_path" in st.session_state:
-            del st.session_state["job_path"]
+        # clear_cache()
 
     elif page == "Jobs":
-        clear_cache()
         modules.jobs.runUI()
 
     elif page == "About & Help":
-        clear_cache()
         modules.about.runUI()
-        if "job_path" in st.session_state:
-            del st.session_state["job_path"]
+        clear_cache()
+
+    # Show dialog once per session
+    if "cookie" not in st.session_state:
+        cookie_dialog()
 
     st.markdown(
         f"""

@@ -4,3 +4,5 @@ __pycache__
 logs
 test.ipynb
 *.tmp
+task_results.db
+jobs

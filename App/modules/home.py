@@ -18,9 +18,9 @@ def runUI():
 				<div class="container-max">
 					<section class="hero">
 						<img src="data:image/png;base64,{logo_b64}" alt="logo" width="110" />
-						<div class="hero-title">NFDI ENA Submission Tool</div>
-						<div class="hero-sub">Validate metadata and prepare metagenome-assembled genome (MAG) submissions.</div>
-						<div class="badge">Genomic Standards Consortium package for MAGs (MIMAGS) supported.</div>
+						<div class="hero-title">ENA MAG Submission Wizard</div>
+						<div class="hero-sub">From assembled bins to ENA accession numbers — without writing a single line of XML or running Webin-CLI by hand.</div>
+						<div class="badge">Genomic Standards Consortium package for MAGs (MIMAGS) supported</div>
 					</section>
 				</div>
 				""",
@@ -32,30 +32,32 @@ def runUI():
 		st.markdown(
 				"""
 				<div class="container-max section">
-					<div class="h2">✨ Features</div>
+					<div class="h2">✨ What it does for you</div>
 					<div class="cards-3">
 						<div class="card">
-							<h4>Checklist-aware validation</h4>
+							<h4>Auto-fill from your tools</h4>
 							<ul class="list">
-								<li>Dynamic parsing of ENA XML checklists</li>
-								<li>Mandatory field verification</li>
-								<li>Regex and controlled vocabulary validation</li>
+								<li>Import completeness &amp; contamination directly from CheckM or CheckM2 output</li>
+								<li>Import organism names from GTDB-Tk summary files</li>
+								<li>Resolve NCBI taxon IDs in batch against the ENA taxonomy API</li>
+								<li>Search the ENVO ontology for environmental context terms</li>
 							</ul>
 						</div>
 						<div class="card">
-							<h4>MAG metadata processing</h4>
+							<h4>Catch errors before ENA does</h4>
 							<ul class="list">
-								<li>TSV metadata table support</li>
-								<li>Automatic FASTA.gz discovery</li>
-								<li>Batch processing for large MAG collections</li>
+								<li>Validates every cell against the live ERC000047 checklist</li>
+								<li>Flags missing mandatory fields, regex mismatches, and invalid controlled-vocabulary values</li>
+								<li>Row-level error table so you know exactly what to fix</li>
 							</ul>
 						</div>
 						<div class="card">
-							<h4>Automated ENA submission</h4>
+							<h4>Submit with one click</h4>
 							<ul class="list">
-								<li>Automatic SAMPLE and PROJECT XML generation</li>
-								<li>Webin-CLI manifest creation and submission</li>
-								<li>Accession recovery and submission logging</li>
+								<li>Generates all required SAMPLE and PROJECT XML automatically</li>
+								<li>Creates per-MAG Webin-CLI manifests, handles chromosome lists for single-contig bins</li>
+								<li>Runs in the background — accession numbers and logs saved automatically</li>
+								<li>Supports both the ENA Testing and Production portals</li>
 							</ul>
 						</div>
 					</div>
@@ -69,45 +71,28 @@ def runUI():
 		st.markdown(
 				"""
 				<div class="container-max section">
-					<div class="h2">🔄 Workflow</div>
+					<div class="h2">🔄 How it works</div>
 					<div class="timeline">
-						<div class="step"><b>Prepare</b> your metadata (or start from our template).</div>
-						<div class="step"><b>Open the editor</b>: create rows or upload TSV.</div>
-						<div class="step"><b>Fix issues</b> flagged by the validator (required fields, formats, ontologies).</div>
-						<div class="step"><b>Download</b> a clean TSV ready for ENA submission.</div>
+						<div class="step"><b>Start from a template</b> or upload your existing metadata TSV — the table editor opens immediately.</div>
+						<div class="step"><b>Auto-populate fields</b> by importing your CheckM / CheckM2 quality report and GTDB-Tk taxonomy summary.</div>
+						<div class="step"><b>Resolve taxonomy &amp; ontology terms</b> using the built-in ENA taxonomy search and ENVO browser.</div>
+						<div class="step"><b>Validate</b> — every mandatory field, format, and controlled vocabulary is checked against ERC000047 before anything is sent.</div>
+						<div class="step"><b>Upload your FASTA.gz files</b>, enter your ENA Webin credentials, and hit Submit. Accession numbers are logged and saved automatically.</div>
 					</div>
 				</div>
 				""",
 				unsafe_allow_html=True,
 		)
+
 		st.divider()
-
-		# Template download
-		st.markdown('<div class="container-max section"><div class="h3 pad-top">⬇️ Download template</div></div>', unsafe_allow_html=True)
-
-		with open("../examples/metadata.tsv", "rb") as f:
-			st.download_button(
-					label="Download metadata_template.tsv",
-					data=f,
-					file_name="metadata_template.tsv",
-					mime="text/tab-separated-values",
-					use_container_width=True,
-			)
-		st.divider()
-
-		# # CTA
-		# st.markdown('<div class="container-max section"><div class="h2">✅ Ready to validate & submit?</div></div>', unsafe_allow_html=True)
-		# try:
-		# 		st.page_link("pages/1_Validate_and_Submit.py", label="Go to Validate & Submit", icon="✅")
-		# except Exception:
-		# 		st.markdown("> Use the left menu to open **Create & Validate Metadata**.")
 
 		st.markdown(
 				"""
-				**References**  
-				- [GSC MIMAGS - Checklist: ERC000047](https://www.ebi.ac.uk/ena/browser/view/ERC000047)  
-				- [MIXS Term Browser](https://w3id.org/mixs/)  
-				- [ENA Submission Portal](https://www.ebi.ac.uk/ena/browser/submit)
+				**References**
+				- [GSC MIMAGS — Checklist: ERC000047](https://www.ebi.ac.uk/ena/browser/view/ERC000047)
+				- [MIxS Term Browser](https://w3id.org/mixs/)
+				- [ENA Webin Submission Portal](https://www.ebi.ac.uk/ena/browser/submit)
+				- [ENVO Ontology](https://www.ebi.ac.uk/ols4/ontologies/envo)
 				"""
 		)
 
