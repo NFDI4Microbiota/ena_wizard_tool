@@ -26,19 +26,19 @@ def send_job_email(email, job_id, status):
 
     # Email content
     if status == "started":
-        subject = f"[NFDI ENA Submission tool] Job submitted to queue"
+        subject = f"[NFDI MAG2ENA] Job submitted to queue"
         body = f"""Dear user,\n\nYour job was submitted to the queue.\nJob ID: {job_id}\n\nYou will receive an email when your job is finished."""
     elif status == "success":
-        subject = f"[NFDI ENA Submission tool] Job has finished"
+        subject = f"[NFDI MAG2ENA] Job has finished"
         body = f"""Dear user,\n\nYour job has completed successfully.\nJob ID: {job_id}\n\nConsult the output in the Jobs module using your Job ID."""
     elif status == "failed":
-        subject = f"[NFDI ENA Submission tool] Job has finished"
+        subject = f"[NFDI MAG2ENA] Job has finished"
         body = f"""Dear user,\n\nYour job has failed.\n\nTry submitting again later."""
 
     response =  requests.post(
                 "https://api.mailgun.net/v3/bioauto.inteligentehub.com.br/messages",
                 auth=("api", api_key),
-                data={"from": "NFDI ENA Submission tool <submission@bioauto.inteligentehub.com.br>",
+                data={"from": "NFDI MAG2ENA <submission@bioauto.inteligentehub.com.br>",
                     "to": email,
                     "subject": subject,
                     "text": body})
