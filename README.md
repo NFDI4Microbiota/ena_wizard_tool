@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="App/imgs/mag2ena_logo.png" alt="MAG2ENA logo" width="300"/>
+</p>
+
 # NFDI MAG2ENA
 
 Automated validation and submission pipeline for **Metagenome-Assembled Genomes (MAGs)** to the **European Nucleotide Archive (ENA)**, implementing the [GSC MIMAGS / ERC000047](https://www.ebi.ac.uk/ena/browser/view/ERC000047) checklist.
