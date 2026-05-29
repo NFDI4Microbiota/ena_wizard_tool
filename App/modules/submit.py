@@ -34,6 +34,102 @@ EXAMPLES_DIR = _PROJECT_DIR / "examples"
 # METADATA HELPERS
 # =========================================================
 
+_DATE_REGEX = re.compile(
+    r'^[12][0-9]{3}(-(0[1-9]|1[0-2])(-(0[1-9]|[12][0-9]|3[01])'
+    r'(T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z?([+-][0-9]{1,2})?)?)?)?'
+    r'(/[0-9]{4}(-[0-9]{2}(-[0-9]{2}'
+    r'(T[0-9]{2}:[0-9]{2}(:[0-9]{2})?Z?([+-][0-9]{1,2})?)?)?)?)?$'
+)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_ena_sample_metadata(sample_acc: str) -> dict:
+    """Fetch sample attributes from ENA XML API for a sample accession."""
+    url = f"https://www.ebi.ac.uk/ena/browser/api/xml/{sample_acc.strip()}"
+    try:
+        r = requests.get(url, timeout=12)
+        r.raise_for_status()
+        root = ET.fromstring(r.content)
+        attrs = {}
+        for attr in root.findall(".//SAMPLE_ATTRIBUTE"):
+            tag = attr.findtext("TAG", "").strip()
+            value = attr.findtext("VALUE", "").strip()
+            if tag:
+                attrs[tag] = value
+        sci_name = root.findtext(".//SAMPLE_NAME/SCIENTIFIC_NAME", "").strip()
+        if not attrs.get("organism") and sci_name:
+            attrs["organism"] = sci_name
+        return attrs
+    except Exception as exc:
+        return {"_error": str(exc)}
+
+
+def _fix_coordinate_string(coord_str: str):
+    """Parse lat_lon attribute (e.g. '1.5 N 40.2 E') into (lat_str, lon_str)."""
+    if not coord_str:
+        return None, None
+    coord_str = str(coord_str).strip()
+    match = re.search(
+        r'(\d*\.?\d+)\s*([NS])\s+(\d*\.?\d+)\s*([EW])',
+        coord_str,
+        re.IGNORECASE,
+    )
+    if match:
+        lat = float(match.group(1)) * (-1 if match.group(2).upper() == "S" else 1)
+        lon = float(match.group(3)) * (-1 if match.group(4).upper() == "W" else 1)
+        return str(round(lat, 6)), str(round(lon, 6))
+    # Bare "lat lon" without direction letters
+    parts = coord_str.split()
+    if len(parts) == 2:
+        try:
+            return str(float(parts[0])), str(float(parts[1]))
+        except ValueError:
+            pass
+    return None, None
+
+
+def _normalize_date(date_str: str) -> str:
+    """Normalise a date string to the ISO 8601 format ENA expects."""
+    if not date_str or date_str.strip() in ("", "missing"):
+        return ""
+    d = re.sub(r'^(\d{4})$', r'\1-01-01', date_str.strip())
+    d = re.sub(r'^(\d{4})-(\d{2})$', r'\1-\2-01', d)
+    d = re.sub(r'^(\d{4})(\d{2})(\d{2})$', r'\1-\2-\3', d)
+    return d if _DATE_REGEX.fullmatch(d) else ""
+
+
+def _attrs_to_mag_metadata(attrs: dict) -> dict:
+    """Map raw ENA sample attributes to MAG metadata column names."""
+    env_broad = attrs.get("env_broad_scale") or attrs.get("env_biome") or ""
+    env_local = attrs.get("env_local_scale") or attrs.get("env_feature") or ""
+    env_medium = attrs.get("env_medium") or attrs.get("env_material") or ""
+
+    if not env_broad and not env_local and not env_medium:
+        gold = attrs.get("GOLD Ecosystem Classification", "")
+        if gold:
+            parts = gold.split(" | ")
+            env_broad = parts[1] if len(parts) > 1 else ""
+            env_local = parts[2] if len(parts) > 2 else ""
+            env_medium = parts[3] if len(parts) > 3 else ""
+
+    geo_loc_name = attrs.get("geo_loc_name", "")
+    country = geo_loc_name.split(":")[0].strip() if geo_loc_name else ""
+
+    lat, lon = _fix_coordinate_string(attrs.get("lat_lon", ""))
+
+    return {
+        "metagenomic source": attrs.get("organism", ""),
+        "isolation_source": attrs.get("isolation_source", ""),
+        "collection date": _normalize_date(attrs.get("collection_date", "")),
+        "geographic location (latitude)": lat or "",
+        "geographic location (longitude)": lon or "",
+        "broad-scale environmental context": env_broad,
+        "local environmental context": env_local,
+        "environmental medium": env_medium,
+        "geographic location (country and/or sea)": country,
+    }
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _ena_taxonomy_search(query: str) -> list[dict]:
     if len(query.strip()) < 3:
@@ -784,13 +880,41 @@ def runUI():
     # ── Step 1: Metadata ──────────────────────────────────────────────────────
     st.subheader("Step 1 — Metadata")
 
+    use_example = st.toggle(
+        "Load example data",
+        key="use_example_toggle",
+        help=(
+            "Populate the metadata table with two example MAGs and automatically load their "
+            "FASTA files — lets you test the full submission workflow without your own data."
+        ),
+    )
+
+    if use_example and not st.session_state.get("_example_active"):
+        st.session_state.metadata_df = load_tsv_into_schema(
+            EXAMPLES_DIR / "metadata.tsv", field_defs
+        )
+        st.session_state.pop("validated_df", None)
+        st.session_state.pop("tsv_filename", None)
+        st.session_state.pop("_example_fasta_map", None)
+        st.session_state.editor_key += 1
+        st.session_state._example_active = True
+        st.rerun()
+    elif not use_example and st.session_state.get("_example_active"):
+        st.session_state.metadata_df = initialize_empty_dataframe(field_defs)
+        st.session_state.pop("validated_df", None)
+        st.session_state.pop("_example_fasta_map", None)
+        st.session_state.editor_key += 1
+        st.session_state._example_active = False
+        st.rerun()
+
     col_upload, col_template = st.columns([3, 1])
 
     with col_upload:
         uploaded_tsv = st.file_uploader(
             "Upload metadata TSV (optional)",
             type=["tsv"],
-            help="Upload an existing TSV to pre-fill the table. You can continue editing it below."
+            help="Upload an existing TSV to pre-fill the table. You can continue editing it below.",
+            disabled=use_example,
         )
 
     with col_template:
@@ -807,7 +931,7 @@ def runUI():
 
     # Only reload from TSV when a new file is uploaded (different filename),
     # so that subsequent user edits to the table are not overwritten on re-render.
-    if uploaded_tsv:
+    if not use_example and uploaded_tsv:
         if st.session_state.get("tsv_filename") != uploaded_tsv.name:
             st.session_state.metadata_df = load_tsv_into_schema(uploaded_tsv, field_defs)
             st.session_state.tsv_filename = uploaded_tsv.name
@@ -836,12 +960,140 @@ def runUI():
     # ── Step 1b: Metadata assistance ─────────────────────────────────────────
     with st.expander("Metadata assistance"):
 
-        tab_tax, tab_envo, tab_fill, tab_import = st.tabs([
+        tab_ena, tab_tax, tab_envo, tab_fill, tab_import = st.tabs([
+            "ENA autofill",
             "Taxonomy resolver",
             "ENVO term search",
             "Fill column",
             "Import quality files",
         ])
+
+        # ── ENA autofill ──────────────────────────────────────────────────────
+        with tab_ena:
+            st.caption(
+                "Look up the original metagenome in ENA using the accession(s) in "
+                "`sample derived from` and autofill environmental metadata. "
+                "Fills: `metagenomic source`, `isolation_source`, `collection date`, "
+                "`geographic location (latitude/longitude)`, "
+                "`broad-scale environmental context`, `local environmental context`, "
+                "`environmental medium`, `geographic location (country and/or sea)`. "
+                "Only empty cells are overwritten — existing values are preserved."
+            )
+
+            derived_col = st.session_state.metadata_df.get(
+                "sample derived from", pd.Series(dtype="string")
+            )
+            unique_accs = sorted({
+                str(a).strip()
+                for a in derived_col.dropna()
+                if str(a).strip() not in ("", "<NA>", "None", "nan")
+            })
+
+            if unique_accs:
+                st.info(
+                    f"Found {len(unique_accs)} unique accession(s) in `sample derived from`: "
+                    + ", ".join(f"`{a}`" for a in unique_accs[:6])
+                    + ("…" if len(unique_accs) > 6 else "")
+                )
+            else:
+                st.warning(
+                    "No accessions found in `sample derived from`. "
+                    "Fill in that column first, then come back here."
+                )
+
+            col_prev_input, col_prev_btn = st.columns([3, 1])
+            with col_prev_input:
+                preview_acc = st.text_input(
+                    "Preview a single accession",
+                    placeholder="e.g. ERS1234567 or SRS1981904",
+                    key="ena_preview_acc",
+                )
+            with col_prev_btn:
+                st.write("")
+                preview_clicked = st.button(
+                    "Preview",
+                    key="btn_ena_preview",
+                    use_container_width=True,
+                )
+
+            if preview_clicked:
+                acc = preview_acc.strip()
+                if not acc:
+                    st.warning("Enter an accession to preview.")
+                else:
+                    with st.spinner(f"Querying ENA for {acc}…"):
+                        raw = _fetch_ena_sample_metadata(acc)
+                    if "_error" in raw:
+                        st.error(f"Could not fetch metadata: {raw['_error']}")
+                        st.session_state.pop("ena_preview_result", None)
+                    else:
+                        st.session_state.ena_preview_result = _attrs_to_mag_metadata(raw)
+
+            preview_result = st.session_state.get("ena_preview_result")
+            if preview_result:
+                preview_rows = [
+                    {"field": k, "value": v}
+                    for k, v in preview_result.items()
+                    if v
+                ]
+                if preview_rows:
+                    st.dataframe(
+                        pd.DataFrame(preview_rows),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+                else:
+                    st.info("No fillable attributes found for this accession.")
+
+            st.divider()
+
+            if st.button(
+                "Autofill from all accessions",
+                key="btn_ena_autofill",
+                type="primary",
+                use_container_width=True,
+                disabled=not unique_accs,
+            ):
+                df_mod = st.session_state.metadata_df.copy()
+                cells_filled = 0
+                failed_accs = []
+
+                with st.spinner(
+                    f"Fetching metadata for {len(unique_accs)} accession(s)…"
+                ):
+                    for acc in unique_accs:
+                        raw = _fetch_ena_sample_metadata(acc)
+                        if "_error" in raw:
+                            failed_accs.append(acc)
+                            continue
+                        mapped = _attrs_to_mag_metadata(raw)
+                        mask = df_mod["sample derived from"] == acc
+                        for col, val in mapped.items():
+                            if col not in df_mod.columns or not val:
+                                continue
+                            for idx in df_mod.index[mask]:
+                                current = df_mod.at[idx, col]
+                                if pd.isna(current) or str(current).strip() in (
+                                    "", "<NA>", "None", "nan"
+                                ):
+                                    df_mod.at[idx, col] = val
+                                    cells_filled += 1
+
+                st.session_state.metadata_df = df_mod
+                st.session_state.pop("validated_df", None)
+                st.session_state.pop("ena_preview_result", None)
+                st.session_state.editor_key += 1
+
+                if cells_filled:
+                    st.toast(f"Filled {cells_filled} cell(s) from ENA.", icon="✅")
+                if failed_accs:
+                    st.warning(
+                        "Could not fetch metadata for: "
+                        + ", ".join(f"`{a}`" for a in failed_accs)
+                    )
+                if not cells_filled and not failed_accs:
+                    st.info("No empty cells to fill — all matching fields already have values.")
+                st.rerun()
 
         # ── Taxonomy resolver ─────────────────────────────────────────────────
         with tab_tax:
@@ -1163,49 +1415,76 @@ def runUI():
     st.subheader("Step 2 — FASTA files")
 
     n_samples = len(st.session_state.validated_df)
-    st.caption(
-        f"Upload one `.fasta.gz` file per sample. "
-        f"Expected {n_samples} file(s) — filenames must match the `sample_name` column."
-    )
-
-    uploaded_fastas = st.file_uploader(
-        "Upload FASTA.GZ files",
-        type=["gz"],
-        accept_multiple_files=True,
-    )
 
     fasta_map = {}
 
-    if uploaded_fastas:
-
-        try:
-            fasta_map = persist_fastas_temp(uploaded_fastas)
-        except Exception as e:
-            st.error(str(e))
-            st.stop()
-
-        expected = set(
-            st.session_state.validated_df["sample_name"].dropna()
+    if use_example:
+        st.caption(
+            f"Example FASTA files are loaded automatically — "
+            f"no upload needed when using example data."
         )
-        uploaded = set(fasta_map)
-        missing = expected - uploaded
-        extra = uploaded - expected
 
-        if missing:
-            st.error(
-                f"Missing FASTA files for: {', '.join(sorted(missing))}"
-            )
-            st.stop()
+        # Build temp copies of example FASTAs so the originals are never deleted by the worker.
+        if "_example_fasta_map" not in st.session_state or not all(
+            Path(p).exists() for p in st.session_state._example_fasta_map.values()
+        ):
+            fasta_dir = EXAMPLES_DIR / "fasta"
+            tmp_map = {}
+            for fp in sorted(fasta_dir.glob("*.fasta.gz")):
+                sample_name = fp.name.removesuffix(".fasta.gz")
+                tmp = tempfile.NamedTemporaryFile(suffix=".fasta.gz", delete=False)
+                tmp.write(fp.read_bytes())
+                tmp.flush()
+                tmp.close()
+                tmp_map[sample_name] = str(Path(tmp.name).resolve())
+            st.session_state._example_fasta_map = tmp_map
 
-        if extra:
-            st.warning(
-                f"Extra FASTA files not in the metadata (will be ignored): "
-                f"{', '.join(sorted(extra))}"
-            )
+        fasta_map = {k: Path(v) for k, v in st.session_state._example_fasta_map.items()}
+        names = ", ".join(f"`{k}.fasta.gz`" for k in sorted(fasta_map))
+        st.success(f"Example FASTA files loaded: {names}")
 
-        st.success(
-            f"All {len(fasta_map)} FASTA file(s) uploaded and matched successfully."
+    else:
+        st.caption(
+            f"Upload one `.fasta.gz` file per sample. "
+            f"Expected {n_samples} file(s) — filenames must match the `sample_name` column."
         )
+
+        uploaded_fastas = st.file_uploader(
+            "Upload FASTA.GZ files",
+            type=["gz"],
+            accept_multiple_files=True,
+        )
+
+        if uploaded_fastas:
+
+            try:
+                fasta_map = persist_fastas_temp(uploaded_fastas)
+            except Exception as e:
+                st.error(str(e))
+                st.stop()
+
+            expected = set(
+                st.session_state.validated_df["sample_name"].dropna()
+            )
+            uploaded = set(fasta_map)
+            missing = expected - uploaded
+            extra = uploaded - expected
+
+            if missing:
+                st.error(
+                    f"Missing FASTA files for: {', '.join(sorted(missing))}"
+                )
+                st.stop()
+
+            if extra:
+                st.warning(
+                    f"Extra FASTA files not in the metadata (will be ignored): "
+                    f"{', '.join(sorted(extra))}"
+                )
+
+            st.success(
+                f"All {len(fasta_map)} FASTA file(s) uploaded and matched successfully."
+            )
 
     if not fasta_map:
         return

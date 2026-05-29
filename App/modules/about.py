@@ -5,10 +5,10 @@ from utils.css_injection import inject_css
 # =========================
 # Configuráveis
 # =========================
-CONTACT_EMAIL = "you@example.org"
+CONTACT_EMAIL = "ulisses.rocha@ufz.de"
 CONTACT_SITE  = "https://www.ebi.ac.uk/ena/browser/submit"
 ORG_NAME      = "NFDI4Microbiota / Microbial Data Science Group — UFZ"
-APP_NAME      = "ENA MAG Submission Wizard"
+APP_NAME      = "NFDI MAG2ENA"
 SUPPORTED_SCOPE = "MAGs · MIMAGS · ERC000047"
 LICENSE       = "MIT"
 
@@ -73,7 +73,7 @@ def runUI():
         <div class="container-max section">
           <div class="h2">ℹ️ Overview</div>
           <p class="lead">
-            The ENA MAG Submission Wizard is an end-to-end submission pipeline for
+            The NFDI MAG2ENA is an end-to-end submission pipeline for
             Metagenome-Assembled Genomes (MAGs). It takes your assembled bins and
             bioinformatics tool outputs — CheckM quality scores, GTDB-Tk taxonomy — and
             walks you through metadata completion, validation, and direct submission to the
@@ -109,6 +109,7 @@ def runUI():
             - **Anderson P. Avila-Santos** (corresponding author; anderson.santos@ufz.de)
             - Martin Bole
             - Sanchita Kamath
+            - Robson P. Bonidia
             - Peter F. Stadler
             - André C. P. L. F. de Carvalho
             - **Ulisses Rocha** (corresponding author; ulisses.rocha@ufz.de)
@@ -125,7 +126,8 @@ def runUI():
             and the UK government’s Foreign, Commonwealth and Development Office. The views expressed here do not necessarily reflect 
             those of the UK government’s Foreign, Commonwealth and Development Office, IDRC, or IDRC’s Board of Governors. 
             Breno L. S. de Almeida has been funded by the São Paulo Research Foundation (FAPESP), grant #2024/10958-1, and the 
-            Google PhD Fellowship.
+            Google PhD Fellowship. This project (ZT-I-PF-3-108) was funded by the Initiative and Networking Fund of the Helmholtz 
+            Association in the framework of the Helmholtz Metadata Collaboration project call.
 
             We also acknowledge open-source libraries and tools that made this work possible.
             """

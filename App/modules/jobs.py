@@ -82,6 +82,11 @@ def _show_completed_job(job_id, db_info):
     submit_xml = log_dir / "submit.xml"
     if submit_xml.exists():
         with col_xml:
+            st.info(
+                "The XML document sent to ENA's submission API. "
+                "Contains all sample metadata, study information, and checklist attributes.",
+                icon="ℹ️",
+            )
             st.download_button(
                 label="Download submit.xml",
                 data=submit_xml.read_bytes(),
@@ -94,6 +99,12 @@ def _show_completed_job(job_id, db_info):
     manifests_zip = log_dir / "manifests.zip"
     if manifests_zip.exists():
         with col_zip:
+            st.info(
+                "One Webin-CLI manifest file per MAG. "
+                "Each manifest lists the study, sample accession, coverage, "
+                "assembly software, sequencing platform, and FASTA path used for the assembly submission.",
+                icon="ℹ️",
+            )
             st.download_button(
                 label="Download manifests (ZIP)",
                 data=manifests_zip.read_bytes(),
@@ -102,6 +113,21 @@ def _show_completed_job(job_id, db_info):
                 use_container_width=True,
                 key=f"dl_{job_id}_manifests.zip",
             )
+
+    _LOG_DESCRIPTIONS = {
+        "webin_log.xml": (
+            "ENA's response to the metadata XML submission. "
+            "Contains the accession numbers assigned to each sample and any processing messages."
+        ),
+        "success.txt": (
+            "Webin-CLI output for assemblies that were submitted successfully. "
+            "Each entry shows the sample alias and the tool's confirmation message."
+        ),
+        "error.txt": (
+            "Webin-CLI output for assemblies that failed to submit. "
+            "Check this file for validation errors or rejected fields."
+        ),
+    }
 
     log_files = [
         p for p in sorted(log_dir.glob("*"))
@@ -120,6 +146,10 @@ def _show_completed_job(job_id, db_info):
                 content = None
 
             with st.expander(logfile.name, expanded=True):
+                description = _LOG_DESCRIPTIONS.get(logfile.name)
+                if description:
+                    st.info(description, icon="ℹ️")
+
                 if content:
                     lang = "xml" if suffix == ".xml" else "text"
                     st.code(content, language=lang)

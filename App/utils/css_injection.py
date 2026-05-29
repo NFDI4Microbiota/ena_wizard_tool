@@ -11,7 +11,7 @@ def _b64(path: str) -> str:
 def inject_css():
     root = Path(__file__).resolve().parents[1]  # raiz do app
     css_path = root / "css" / "style.css"
-    logo_path = root / "imgs" / "logo.png"
+    logo_path = root / "imgs" / "mag2ena_logo.png"
 
     # injeta background da sidebar + todo o style.css
     st.markdown(

@@ -6,3 +6,4 @@ test.ipynb
 *.tmp
 task_results.db
 jobs
+secrets.toml

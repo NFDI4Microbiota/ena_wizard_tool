@@ -28,7 +28,7 @@ def cookie_dialog():
     st.session_state["cookie"] = True
 
 def runUI():
-    st.set_page_config(page_title = "NFDI ENA Submission Tool", page_icon = "imgs/icon.png", initial_sidebar_state = "expanded", layout="wide")
+    st.set_page_config(page_title = "NFDI MAG2ENA", page_icon = "imgs/mag2ena_logo.png", initial_sidebar_state = "expanded", layout="wide")
 
     utils.inject_css()
 
@@ -64,7 +64,7 @@ def runUI():
         f"""
         <hr>
         <div style="text-align:center; font-size: 0.9em;">
-        © {datetime.now().year} NFDI ENA Submission Tool — Released under the 
+        © {datetime.now().year} NFDI MAG2ENA — Released under the 
         <a href="https://opensource.org/licenses/MIT" target="_blank">MIT License</a>. Free for academic and commercial use.
         </div>
         <br>

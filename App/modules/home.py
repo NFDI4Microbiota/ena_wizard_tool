@@ -12,13 +12,12 @@ def runUI():
 		inject_css()
 
 		# Hero
-		logo_b64 = _load_logo_b64("imgs/logo.png")
+		logo_b64 = _load_logo_b64("imgs/mag2ena_logo.png")
 		st.markdown(
 				f"""
 				<div class="container-max">
 					<section class="hero">
-						<img src="data:image/png;base64,{logo_b64}" alt="logo" width="110" />
-						<div class="hero-title">ENA MAG Submission Wizard</div>
+						<img src="data:image/png;base64,{logo_b64}" alt="logo" width="600" />
 						<div class="hero-sub">From assembled bins to ENA accession numbers — without writing a single line of XML or running Webin-CLI by hand.</div>
 						<div class="badge">Genomic Standards Consortium package for MAGs (MIMAGS) supported</div>
 					</section>
@@ -35,8 +34,9 @@ def runUI():
 					<div class="h2">✨ What it does for you</div>
 					<div class="cards-3">
 						<div class="card">
-							<h4>Auto-fill from your tools</h4>
+							<h4>Auto-fill from your tools &amp; ENA</h4>
 							<ul class="list">
+								<li>Fetch environmental metadata (collection date, coordinates, biome, isolation source, and more) directly from the original metagenome in ENA — just provide the sample accession</li>
 								<li>Import completeness &amp; contamination directly from CheckM or CheckM2 output</li>
 								<li>Import organism names from GTDB-Tk summary files</li>
 								<li>Resolve NCBI taxon IDs in batch against the ENA taxonomy API</li>
@@ -74,10 +74,34 @@ def runUI():
 					<div class="h2">🔄 How it works</div>
 					<div class="timeline">
 						<div class="step"><b>Start from a template</b> or upload your existing metadata TSV — the table editor opens immediately.</div>
-						<div class="step"><b>Auto-populate fields</b> by importing your CheckM / CheckM2 quality report and GTDB-Tk taxonomy summary.</div>
+						<div class="step"><b>Auto-populate from ENA</b> — enter the original metagenome sample accession in <em>sample derived from</em> and let the tool fetch collection date, geographic coordinates, biome terms, isolation source, and more directly from ENA's API.</div>
+						<div class="step"><b>Auto-populate from your tools</b> by importing your CheckM / CheckM2 quality report and GTDB-Tk taxonomy summary.</div>
 						<div class="step"><b>Resolve taxonomy &amp; ontology terms</b> using the built-in ENA taxonomy search and ENVO browser.</div>
 						<div class="step"><b>Validate</b> — every mandatory field, format, and controlled vocabulary is checked against ERC000047 before anything is sent.</div>
 						<div class="step"><b>Upload your FASTA.gz files</b>, enter your ENA Webin credentials, and hit Submit. Accession numbers are logged and saved automatically.</div>
+					</div>
+				</div>
+				""",
+				unsafe_allow_html=True,
+		)
+
+		st.divider()
+
+		st.markdown(
+				"""
+				<div class="container-max section">
+					<div class="h2">⚡ Need to submit thousands of MAGs?</div>
+					<div class="callout">
+						<p>The web app processes up to <strong>1,000 MAGs per job</strong>. For larger collections or automated pipelines, use the <strong>command-line interface</strong> included in this repository — it splits submissions into batches automatically and is designed for high-throughput workflows.</p>
+						<br/>
+						<p><strong>Quick start:</strong></p>
+						<pre style="background:rgba(0,0,0,0.04);padding:10px;border-radius:6px;font-size:14px;">python nfdi-mag2ena.py \\
+  --metadata metadata.tsv \\
+  --fasta-dir fasta/ \\
+  --ena-user YOUR_USER \\
+  --ena-password YOUR_PASS \\
+  --study-accession PRJEBXXXX</pre>
+						<p style="margin-top:8px;">See the <a href="https://github.com/NFDI4Microbiota/ena_wizard_tool" target="_blank">README on GitHub</a> for full usage instructions and all available options.</p>
 					</div>
 				</div>
 				""",
